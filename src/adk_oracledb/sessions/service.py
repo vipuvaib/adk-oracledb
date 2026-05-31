@@ -55,7 +55,7 @@ class OracleSessionServiceConfig(BaseModel):
     table_prefix = value.strip().upper()
     if not table_prefix:
       raise ValueError("table_prefix must not be empty")
-    if not re.fullmatch(r"[A-Z0-9_]+", table_prefix):
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*", table_prefix):
       raise ValueError(
           "table_prefix must contain only letters, numbers, and underscore"
       )
