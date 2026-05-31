@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adk-oracledb"
+version = "0.0.0"
+description = "Oracle Database integration for Google ADK"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "google-adk",
+    "pydantic>=2",
+    "oracledb",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
