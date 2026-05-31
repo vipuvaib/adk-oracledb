@@ -203,6 +203,13 @@ class OracleSessionService(BaseSessionService):
       session_id: str,
       config: GetSessionConfig | None = None,
   ) -> Session | None:
+    if (
+        config
+        and config.num_recent_events is not None
+        and config.num_recent_events < 0
+    ):
+      raise ValueError("num_recent_events must be non-negative.")
+
     sessions_table = self._table_name("SESSIONS")
     events_table = self._table_name("EVENTS")
     connection = await create_oracle_connection(self._config)
@@ -293,13 +300,78 @@ class OracleSessionService(BaseSessionService):
   async def list_sessions(
       self, *, app_name: str, user_id: str | None = None
   ) -> ListSessionsResponse:
-    raise NotImplementedError
+    sessions_table = self._table_name("SESSIONS")
+    where_clauses = ["app_name = :app_name"]
+    params: dict[str, Any] = {"app_name": app_name}
+    if user_id is not None:
+      where_clauses.append("user_id = :user_id")
+      params["user_id"] = user_id
+
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      await _call(
+          cursor.execute,
+          f"""
+          SELECT user_id, session_id, state_json, last_update_time
+          FROM {sessions_table}
+          WHERE {" AND ".join(where_clauses)}
+          ORDER BY last_update_time DESC, user_id ASC, session_id ASC
+          """,
+          params,
+      )
+      rows = await _call(cursor.fetchall)
+      sessions = []
+      for row in rows:
+        session_user_id = row[0]
+        session_id = row[1]
+        session_state = await _json_to_dict(row[2])
+        last_update_time = _timestamp_to_float(row[3])
+        sessions.append(
+            Session(
+                app_name=app_name,
+                user_id=session_user_id,
+                id=session_id,
+                state=session_state,
+                events=[],
+                last_update_time=last_update_time,
+            )
+        )
+      return ListSessionsResponse(sessions=sessions)
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)
 
   @override
   async def delete_session(
       self, *, app_name: str, user_id: str, session_id: str
   ) -> None:
-    raise NotImplementedError
+    sessions_table = self._table_name("SESSIONS")
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      await _call(
+          cursor.execute,
+          f"""
+          DELETE FROM {sessions_table}
+          WHERE app_name = :app_name
+            AND user_id = :user_id
+            AND session_id = :session_id
+          """,
+          {
+              "app_name": app_name,
+              "user_id": user_id,
+              "session_id": session_id,
+          },
+      )
+      await _call(connection.commit)
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)
 
   @override
   async def append_event(self, session: Session, event: Event) -> Event:
