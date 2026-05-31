@@ -38,6 +38,41 @@ async def _close(resource: Any) -> None:
     await _maybe_await(close())
 
 
+async def _read_db_value(value: Any) -> Any:
+  read = getattr(value, "read", None)
+  if read is not None:
+    value = await _maybe_await(read())
+  if isinstance(value, (bytes, bytearray)):
+    return value.decode("utf-8")
+  return value
+
+
+async def _json_to_dict(value: Any) -> dict[str, Any]:
+  value = await _read_db_value(value)
+  if value is None:
+    return {}
+  if isinstance(value, str):
+    value = json.loads(value) if value else {}
+  if not isinstance(value, dict):
+    raise ValueError("Expected JSON object from Oracle session state.")
+  return value
+
+
+async def _event_from_json(value: Any) -> Event:
+  value = await _read_db_value(value)
+  if isinstance(value, str):
+    return Event.model_validate_json(value)
+  return Event.model_validate(value)
+
+
+def _timestamp_to_float(value: Any) -> float:
+  if isinstance(value, datetime):
+    if value.tzinfo is None:
+      value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
+  return float(value)
+
+
 class OracleSessionServiceConfig(BaseModel):
   """Configuration for Oracle-backed ADK session storage."""
 
@@ -168,7 +203,91 @@ class OracleSessionService(BaseSessionService):
       session_id: str,
       config: GetSessionConfig | None = None,
   ) -> Session | None:
-    raise NotImplementedError
+    sessions_table = self._table_name("SESSIONS")
+    events_table = self._table_name("EVENTS")
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      await _call(
+          cursor.execute,
+          f"""
+          SELECT state_json, last_update_time
+          FROM {sessions_table}
+          WHERE app_name = :app_name
+            AND user_id = :user_id
+            AND session_id = :session_id
+          """,
+          {
+              "app_name": app_name,
+              "user_id": user_id,
+              "session_id": session_id,
+          },
+      )
+      session_row = await _call(cursor.fetchone)
+      if session_row is None:
+        return None
+
+      session_state = await _json_to_dict(session_row[0])
+      last_update_time = _timestamp_to_float(session_row[1])
+
+      event_rows = []
+      if not (config and config.num_recent_events == 0):
+        where_clauses = [
+            "app_name = :app_name",
+            "user_id = :user_id",
+            "session_id = :session_id",
+        ]
+        params: dict[str, Any] = {
+            "app_name": app_name,
+            "user_id": user_id,
+            "session_id": session_id,
+        }
+        if config and config.after_timestamp is not None:
+          where_clauses.append("event_ts >= :after_timestamp")
+          params["after_timestamp"] = datetime.fromtimestamp(
+              config.after_timestamp, tz=timezone.utc
+          )
+
+        where_sql = " AND ".join(where_clauses)
+        if config and config.num_recent_events is not None:
+          params["num_recent_events"] = config.num_recent_events
+          events_query = f"""
+            SELECT event_json
+            FROM (
+              SELECT event_json, event_ts, event_id
+              FROM {events_table}
+              WHERE {where_sql}
+              ORDER BY event_ts DESC, event_id DESC
+            )
+            WHERE ROWNUM <= :num_recent_events
+          """
+        else:
+          events_query = f"""
+            SELECT event_json
+            FROM {events_table}
+            WHERE {where_sql}
+            ORDER BY event_ts ASC, event_id ASC
+          """
+
+        await _call(cursor.execute, events_query, params)
+        event_rows = await _call(cursor.fetchall)
+        if config and config.num_recent_events is not None:
+          event_rows = list(reversed(event_rows))
+
+      events = [await _event_from_json(row[0]) for row in event_rows]
+      return Session(
+          app_name=app_name,
+          user_id=user_id,
+          id=session_id,
+          state=session_state,
+          events=events,
+          last_update_time=last_update_time,
+      )
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)
 
   @override
   async def list_sessions(
