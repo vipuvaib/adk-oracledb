@@ -38,6 +38,15 @@ async def _close(resource: Any) -> None:
     await _maybe_await(close())
 
 
+async def _rollback(connection: Any) -> None:
+  rollback = getattr(connection, "rollback", None)
+  if rollback is not None:
+    try:
+      await _maybe_await(rollback())
+    except Exception:
+      pass
+
+
 async def _read_db_value(value: Any) -> Any:
   read = getattr(value, "read", None)
   if read is not None:
@@ -375,7 +384,105 @@ class OracleSessionService(BaseSessionService):
 
   @override
   async def append_event(self, session: Session, event: Event) -> Event:
-    raise NotImplementedError
+    if event.partial:
+      return event
+
+    self._apply_temp_state(session, event)
+    event = self._trim_temp_delta_state(event)
+
+    event_timestamp = event.timestamp or platform_time.get_time()
+    event.timestamp = event_timestamp
+    event_time = datetime.fromtimestamp(event_timestamp, tz=timezone.utc)
+    state_delta = event.actions.state_delta or {}
+    sessions_table = self._table_name("SESSIONS")
+    events_table = self._table_name("EVENTS")
+
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      await _call(
+          cursor.execute,
+          f"""
+          SELECT state_json
+          FROM {sessions_table}
+          WHERE app_name = :app_name
+            AND user_id = :user_id
+            AND session_id = :session_id
+          FOR UPDATE
+          """,
+          {
+              "app_name": session.app_name,
+              "user_id": session.user_id,
+              "session_id": session.id,
+          },
+      )
+      session_row = await _call(cursor.fetchone)
+      if session_row is None:
+        raise ValueError(f"Session {session.id} not found.")
+
+      stored_state = await _json_to_dict(session_row[0])
+      if state_delta:
+        stored_state.update(state_delta)
+
+      await _call(
+          cursor.execute,
+          f"""
+          UPDATE {sessions_table}
+          SET state_json = :state_json,
+              last_update_time = :last_update_time
+          WHERE app_name = :app_name
+            AND user_id = :user_id
+            AND session_id = :session_id
+          """,
+          {
+              "state_json": json.dumps(stored_state, allow_nan=False),
+              "last_update_time": event_time,
+              "app_name": session.app_name,
+              "user_id": session.user_id,
+              "session_id": session.id,
+          },
+      )
+      await _call(
+          cursor.execute,
+          f"""
+          INSERT INTO {events_table} (
+            app_name,
+            user_id,
+            session_id,
+            event_id,
+            event_ts,
+            event_json
+          )
+          VALUES (
+            :app_name,
+            :user_id,
+            :session_id,
+            :event_id,
+            :event_ts,
+            :event_json
+          )
+          """,
+          {
+              "app_name": session.app_name,
+              "user_id": session.user_id,
+              "session_id": session.id,
+              "event_id": event.id,
+              "event_ts": event_time,
+              "event_json": event.model_dump_json(exclude_none=True),
+          },
+      )
+      await _call(connection.commit)
+    except BaseException:
+      await _rollback(connection)
+      raise
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)
+
+    session.last_update_time = event_timestamp
+    return await super().append_event(session, event)
 
   @override
   async def flush(self) -> None:
