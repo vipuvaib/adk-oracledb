@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from datetime import timezone
 import inspect
 import json
+from pathlib import Path
 import re
 from typing import Any
 
@@ -20,6 +22,10 @@ from pydantic import BaseModel
 from pydantic import Field
 from pydantic import field_validator
 from typing_extensions import override
+
+
+_ORACLE_ALREADY_EXISTS_CODE = 955
+_SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -82,6 +88,30 @@ def _timestamp_to_float(value: Any) -> float:
   return float(value)
 
 
+def _schema_statements(table_prefix: str) -> list[str]:
+  schema_sql = _SCHEMA_PATH.read_text(encoding="utf-8")
+  schema_sql = schema_sql.replace("ADK_", f"{table_prefix}_")
+  sql_lines = []
+  for line in schema_sql.splitlines():
+    if not line.strip().startswith("--"):
+      sql_lines.append(line)
+  return [
+      statement.strip()
+      for statement in "\n".join(sql_lines).split(";")
+      if statement.strip()
+  ]
+
+
+def _is_oracle_already_exists_error(error: BaseException) -> bool:
+  if f"ORA-{_ORACLE_ALREADY_EXISTS_CODE:05d}" in str(error):
+    return True
+
+  for arg in getattr(error, "args", ()):
+    if getattr(arg, "code", None) == _ORACLE_ALREADY_EXISTS_CODE:
+      return True
+  return False
+
+
 class OracleSessionServiceConfig(BaseModel):
   """Configuration for Oracle-backed ADK session storage."""
 
@@ -111,9 +141,40 @@ class OracleSessionService(BaseSessionService):
 
   def __init__(self, config: OracleSessionServiceConfig):
     self._config = config
+    self._schema_initialized = False
+    self._schema_init_lock = asyncio.Lock()
 
   def _table_name(self, suffix: str) -> str:
     return f"{self._config.table_prefix}_{suffix}"
+
+  async def _initialize_schema(self) -> None:
+    if not self._config.auto_create_tables or self._schema_initialized:
+      return
+
+    async with self._schema_init_lock:
+      if self._schema_initialized:
+        return
+
+      connection = await create_oracle_connection(self._config)
+      cursor = None
+      try:
+        cursor = await _call(connection.cursor)
+        for statement in _schema_statements(self._config.table_prefix):
+          try:
+            await _call(cursor.execute, statement)
+          except Exception as e:
+            if _is_oracle_already_exists_error(e):
+              continue
+            raise
+        await _call(connection.commit)
+        self._schema_initialized = True
+      except BaseException:
+        await _rollback(connection)
+        raise
+      finally:
+        if cursor is not None:
+          await _close(cursor)
+        await _close(connection)
 
   @override
   async def create_session(
@@ -135,6 +196,7 @@ class OracleSessionService(BaseSessionService):
     now = datetime.fromtimestamp(now_timestamp, tz=timezone.utc)
     sessions_table = self._table_name("SESSIONS")
 
+    await self._initialize_schema()
     connection = await create_oracle_connection(self._config)
     cursor = None
     try:
@@ -221,6 +283,7 @@ class OracleSessionService(BaseSessionService):
 
     sessions_table = self._table_name("SESSIONS")
     events_table = self._table_name("EVENTS")
+    await self._initialize_schema()
     connection = await create_oracle_connection(self._config)
     cursor = None
     try:
@@ -316,6 +379,7 @@ class OracleSessionService(BaseSessionService):
       where_clauses.append("user_id = :user_id")
       params["user_id"] = user_id
 
+    await self._initialize_schema()
     connection = await create_oracle_connection(self._config)
     cursor = None
     try:
@@ -358,6 +422,7 @@ class OracleSessionService(BaseSessionService):
       self, *, app_name: str, user_id: str, session_id: str
   ) -> None:
     sessions_table = self._table_name("SESSIONS")
+    await self._initialize_schema()
     connection = await create_oracle_connection(self._config)
     cursor = None
     try:
@@ -387,6 +452,7 @@ class OracleSessionService(BaseSessionService):
     if event.partial:
       return event
 
+    await self._initialize_schema()
     self._apply_temp_state(session, event)
     event = self._trim_temp_delta_state(event)
 
