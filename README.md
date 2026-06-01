@@ -36,4 +36,7 @@ Run the manual smoke tests from the repository root:
 an ADK `Event`, and persistence of event `actions.state_delta` into session
 state.
 
+OracleSessionService smoke tests have passed locally against Oracle Database Free with `python-oracledb` 4.0.1 and 3.4.2.
+The 3.4.2 check is useful because Oracle memory work will integrate through `oracleagentmemory`, which currently uses the `python-oracledb` 3.x dependency line.
+
 Memory, artifacts, registry, and MCP tools are not implemented yet.
