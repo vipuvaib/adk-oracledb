@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 from datetime import datetime
 from datetime import timezone
 import inspect
@@ -62,12 +63,25 @@ async def _read_db_value(value: Any) -> Any:
   return value
 
 
+def _normalize_json_value(value: Any) -> Any:
+  if isinstance(value, dict):
+    return {key: _normalize_json_value(item) for key, item in value.items()}
+  if isinstance(value, list):
+    return [_normalize_json_value(item) for item in value]
+  if isinstance(value, Decimal):
+    if value == value.to_integral_value():
+      return int(value)
+    return float(value)
+  return value
+
+
 async def _json_to_dict(value: Any) -> dict[str, Any]:
   value = await _read_db_value(value)
   if value is None:
     return {}
   if isinstance(value, str):
     value = json.loads(value) if value else {}
+  value = _normalize_json_value(value)
   if not isinstance(value, dict):
     raise ValueError("Expected JSON object from Oracle session state.")
   return value
@@ -77,7 +91,7 @@ async def _event_from_json(value: Any) -> Event:
   value = await _read_db_value(value)
   if isinstance(value, str):
     return Event.model_validate_json(value)
-  return Event.model_validate(value)
+  return Event.model_validate(_normalize_json_value(value))
 
 
 def _timestamp_to_float(value: Any) -> float:
