@@ -253,11 +253,12 @@ class OracleMemoryService(BaseMemoryService):
 
   def _create_client_sync(self) -> Any:
     OracleAgentMemory, _, _, Embedder, Llm = _load_oracleagentmemory()
+    embedder = self._build_embedder(Embedder)
+    llm = self._build_llm(Llm)
+
     if self._pool is None:
       self._pool = self._create_pool_sync()
 
-    embedder = self._build_embedder(Embedder)
-    llm = self._build_llm(Llm)
     kwargs: dict[str, Any] = {
         "connection": self._pool,
         "embedder": embedder,
@@ -345,7 +346,47 @@ class OracleMemoryService(BaseMemoryService):
       memories: Sequence[MemoryEntry],
       custom_metadata: Mapping[str, object] | None = None,
   ) -> None:
-    raise NotImplementedError(
-        "OracleMemoryService.add_memory is pending oracleagentmemory "
-        "client wiring."
-    )
+    app_name = app_name.strip()
+    user_id = user_id.strip()
+    if not app_name:
+      raise ValueError("app_name must not be empty")
+    if not user_id:
+      raise ValueError("user_id must not be empty")
+    if not memories:
+      return None
+
+    pending_memories: list[tuple[MemoryEntry, str]] = []
+    for memory in memories:
+      text = _memory_entry_to_text(memory).strip()
+      if text:
+        pending_memories.append((memory, text))
+
+    if not pending_memories:
+      return None
+
+    client = await self._get_client()
+    for memory, text in pending_memories:
+      add_kwargs: dict[str, Any] = {
+          "user_id": user_id,
+          "agent_id": app_name,
+      }
+
+      memory_id = memory.id.strip() if memory.id else None
+      if memory_id:
+        add_kwargs["memory_id"] = memory_id
+
+      metadata: dict[str, object] = dict(custom_metadata or {})
+      if memory.custom_metadata:
+        metadata.update(memory.custom_metadata)
+      if memory.id:
+        metadata["adk_memory_id"] = memory.id
+      if memory.author:
+        metadata["adk_author"] = memory.author
+      if memory.timestamp:
+        metadata["adk_timestamp"] = memory.timestamp
+      if metadata:
+        add_kwargs["metadata"] = metadata
+
+      await asyncio.to_thread(client.add_memory, text, **add_kwargs)
+
+    return None
