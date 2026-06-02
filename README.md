@@ -41,8 +41,8 @@ The 3.4.2 check is useful because Oracle memory work will integrate through `ora
 
 ## OracleMemoryService Status
 
-`OracleMemoryService` has initial client/search wiring and direct `add_memory`
-wiring. Session/event ingestion methods and full smoke tests are still pending.
+`OracleMemoryService` has initial search, direct `add_memory`, and event
+ingestion wiring. Full session ingestion and real smoke tests are still pending.
 
 Install memory dependencies with:
 

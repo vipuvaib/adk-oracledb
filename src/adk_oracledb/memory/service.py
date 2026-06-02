@@ -280,6 +280,36 @@ class OracleMemoryService(BaseMemoryService):
         self._client = await asyncio.to_thread(self._create_client_sync)
       return self._client
 
+  def _get_or_create_thread_sync(
+      self,
+      client: Any,
+      *,
+      app_name: str,
+      user_id: str,
+      session_id: str | None,
+      metadata: Mapping[str, object] | None = None,
+  ) -> Any:
+    thread_metadata = dict(metadata or {})
+    create_kwargs: dict[str, Any] = {
+        "user_id": user_id,
+        "agent_id": app_name,
+        "metadata": thread_metadata,
+        "extract_memories": self._config.extract_memories,
+    }
+
+    if session_id is not None:
+      try:
+        thread = client.get_thread(session_id)
+      except Exception:
+        thread = None
+      else:
+        if thread is not None:
+          return thread
+
+      create_kwargs["thread_id"] = session_id
+
+    return client.create_thread(**create_kwargs)
+
   @override
   async def add_session_to_memory(self, session: Session) -> None:
     raise NotImplementedError(
@@ -332,10 +362,64 @@ class OracleMemoryService(BaseMemoryService):
       session_id: str | None = None,
       custom_metadata: Mapping[str, object] | None = None,
   ) -> None:
-    raise NotImplementedError(
-        "OracleMemoryService.add_events_to_memory is pending "
-        "oracleagentmemory client wiring."
+    app_name = app_name.strip()
+    user_id = user_id.strip()
+    if not app_name:
+      raise ValueError("app_name must not be empty")
+    if not user_id:
+      raise ValueError("user_id must not be empty")
+
+    session_id = session_id.strip() if session_id is not None else None
+    if not session_id:
+      session_id = None
+    if not events:
+      return None
+
+    text_events = [
+        event for event in events if _content_to_text(event.content).strip()
+    ]
+    if not text_events:
+      return None
+
+    _, _, Message, _, _ = _load_oracleagentmemory()
+    thread_metadata: dict[str, object] = dict(custom_metadata or {})
+    thread_metadata.update({
+        "adk_app_name": app_name,
+        "adk_user_id": user_id,
+    })
+    if session_id is not None:
+      thread_metadata["adk_session_id"] = session_id
+
+    messages = []
+    for event in text_events:
+      message = _event_to_message(
+          event, Message, extra_metadata=thread_metadata
+      )
+      if message is not None:
+        messages.append(message)
+    if not messages:
+      return None
+
+    client = await self._get_client()
+    thread = await asyncio.to_thread(
+        self._get_or_create_thread_sync,
+        client,
+        app_name=app_name,
+        user_id=user_id,
+        session_id=session_id,
+        metadata=thread_metadata,
     )
+
+    add_messages_async = getattr(thread, "add_messages_async", None)
+    if (
+        add_messages_async is not None
+        and inspect.iscoroutinefunction(add_messages_async)
+    ):
+      await add_messages_async(messages)
+    else:
+      await asyncio.to_thread(thread.add_messages, messages)
+
+    return None
 
   @override
   async def add_memory(
