@@ -51,4 +51,52 @@ Install memory dependencies with:
 pip install "adk-oracledb[memory]"
 ```
 
+## OracleMemoryService Smoke Test
+
+`OracleMemoryService` has initial method wiring for search, direct memory writes,
+event ingestion, and session ingestion. The current manual memory smoke test
+only verifies direct `add_memory` plus `search_memory`.
+
+Install the memory extra in a local development checkout:
+
+```bash
+pip install -e ".[memory]"
+```
+
+`oracleagentmemory` 26.4.0 currently requires `oracledb>=3.4.2,<4`.
+
+The Oracle user may need additional privileges beyond the session smoke tests.
+Run grants like these as `SYSTEM` or another admin user if needed:
+
+```sql
+GRANT CREATE SESSION TO ADK_USER;
+GRANT CREATE TABLE TO ADK_USER;
+GRANT CREATE SEQUENCE TO ADK_USER;
+GRANT CREATE VIEW TO ADK_USER;
+GRANT CREATE PROCEDURE TO ADK_USER;
+```
+
+The memory smoke test requires an embedding model configuration. Depending on
+the model/provider, `oracleagentmemory` may call an external embedding service.
+
+```bash
+export ORACLE_USER=ADK_USER
+export ORACLE_PASSWORD=...
+export ORACLE_DSN=localhost:1521/FREEPDB1
+export ORACLE_MEMORY_TABLE_PREFIX=ADK_MEMORY_SMOKE
+export ORACLE_MEMORY_EMBEDDER_MODEL=...
+
+.venv/bin/python examples/memory_smoke.py
+```
+
+Optional provider settings:
+
+```bash
+export ORACLE_MEMORY_EMBEDDER_API_BASE=...
+export ORACLE_MEMORY_EMBEDDER_API_KEY=...
+export ORACLE_MEMORY_LLM_MODEL=...
+export ORACLE_MEMORY_LLM_API_BASE=...
+export ORACLE_MEMORY_LLM_API_KEY=...
+```
+
 Artifacts, registry, and MCP tools are not implemented yet.
