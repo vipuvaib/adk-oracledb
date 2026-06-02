@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
+import hashlib
 import inspect
 import re
 from typing import Any
@@ -93,6 +94,70 @@ def _timestamp_to_string(timestamp: float | None) -> str | None:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
   except (OSError, OverflowError, ValueError):
     return str(timestamp)
+
+
+def _oracleagentmemory_thread_id(
+    *,
+    app_name: str,
+    user_id: str,
+    session_id: str,
+) -> str:
+  payload = "\0".join((app_name, user_id, session_id))
+  digest = hashlib.sha256(payload.encode("utf-8")).hexdigest().upper()
+  return f"ADK_THREAD_{digest}"
+
+
+def _is_missing_thread_error(exc: Exception) -> bool:
+  if isinstance(exc, KeyError):
+    return True
+
+  class_name = exc.__class__.__name__.lower()
+  message = str(exc).lower()
+  text = f"{class_name} {message}"
+
+  infrastructure_markers = (
+      "table or view does not exist",
+      "ora-00942",
+      "ora-01017",
+      "ora-01031",
+      "ora-12514",
+      "ora-12154",
+      "connection lost",
+      "connection refused",
+      "permission",
+      "privilege",
+      "schema",
+  )
+  if any(marker in text for marker in infrastructure_markers):
+    return False
+
+  thread_markers = (
+      "thread not found",
+      "thread_not_found",
+      "thread notfound",
+      "thread missing",
+      "thread does not exist",
+      "no such thread",
+  )
+  if any(marker in text for marker in thread_markers):
+    return True
+
+  if "no data found" in text:
+    return True
+
+  if "thread" in text and (
+      "not found" in text
+      or "not_found" in text
+      or "notfound" in text
+  ):
+    return True
+
+  if "thread" in class_name and (
+      "notfound" in class_name or "not_found" in class_name
+  ):
+    return True
+
+  return False
 
 
 def _event_to_message(
@@ -290,6 +355,15 @@ class OracleMemoryService(BaseMemoryService):
       metadata: Mapping[str, object] | None = None,
   ) -> Any:
     thread_metadata = dict(metadata or {})
+    scoped_thread_id = None
+    if session_id is not None:
+      scoped_thread_id = _oracleagentmemory_thread_id(
+          app_name=app_name,
+          user_id=user_id,
+          session_id=session_id,
+      )
+      thread_metadata["oracleagentmemory_thread_id"] = scoped_thread_id
+
     create_kwargs: dict[str, Any] = {
         "user_id": user_id,
         "agent_id": app_name,
@@ -297,25 +371,50 @@ class OracleMemoryService(BaseMemoryService):
         "extract_memories": self._config.extract_memories,
     }
 
-    if session_id is not None:
+    if scoped_thread_id is not None:
       try:
-        thread = client.get_thread(session_id)
-      except Exception:
-        thread = None
+        thread = client.get_thread(scoped_thread_id)
+      except Exception as exc:
+        if not _is_missing_thread_error(exc):
+          raise
       else:
         if thread is not None:
           return thread
 
-      create_kwargs["thread_id"] = session_id
+      create_kwargs["thread_id"] = scoped_thread_id
 
     return client.create_thread(**create_kwargs)
 
   @override
   async def add_session_to_memory(self, session: Session) -> None:
-    raise NotImplementedError(
-        "OracleMemoryService.add_session_to_memory is pending "
-        "oracleagentmemory client wiring."
+    app_name = session.app_name.strip()
+    user_id = session.user_id.strip()
+    session_id = session.id.strip()
+    if not app_name:
+      raise ValueError("app_name must not be empty")
+    if not user_id:
+      raise ValueError("user_id must not be empty")
+    if not session_id:
+      raise ValueError("session.id must not be empty")
+    if not session.events:
+      return None
+
+    metadata: dict[str, object] = {"adk_ingest_source": "session"}
+    if session.last_update_time is not None:
+      metadata["adk_session_last_update_time"] = (
+          _timestamp_to_string(session.last_update_time)
+          if isinstance(session.last_update_time, (int, float))
+          else str(session.last_update_time)
+      )
+
+    await self.add_events_to_memory(
+        app_name=app_name,
+        user_id=user_id,
+        events=session.events,
+        session_id=session_id,
+        custom_metadata=metadata,
     )
+    return None
 
   @override
   async def search_memory(
@@ -375,13 +474,15 @@ class OracleMemoryService(BaseMemoryService):
     if not events:
       return None
 
-    text_events = [
-        event for event in events if _content_to_text(event.content).strip()
-    ]
+    text_events = []
+    for event in events:
+      if getattr(event, "partial", False):
+        continue
+      if _content_to_text(event.content).strip():
+        text_events.append(event)
     if not text_events:
       return None
 
-    _, _, Message, _, _ = _load_oracleagentmemory()
     thread_metadata: dict[str, object] = dict(custom_metadata or {})
     thread_metadata.update({
         "adk_app_name": app_name,
@@ -389,7 +490,15 @@ class OracleMemoryService(BaseMemoryService):
     })
     if session_id is not None:
       thread_metadata["adk_session_id"] = session_id
+      thread_metadata["oracleagentmemory_thread_id"] = (
+          _oracleagentmemory_thread_id(
+              app_name=app_name,
+              user_id=user_id,
+              session_id=session_id,
+          )
+      )
 
+    _, _, Message, _, _ = _load_oracleagentmemory()
     messages = []
     for event in text_events:
       message = _event_to_message(
