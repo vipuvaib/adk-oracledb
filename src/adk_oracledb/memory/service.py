@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
+import inspect
 import re
 from typing import Any
 from typing import Literal
@@ -42,6 +44,17 @@ def _load_oracleagentmemory() -> tuple[Any, Any, Any, Any, Any]:
         'pip install "adk-oracledb[memory]" or pip install oracleagentmemory.'
     ) from e
   return OracleAgentMemory, SchemaPolicy, Message, Embedder, Llm
+
+
+def _load_oracledb() -> Any:
+  try:
+    import oracledb
+  except ImportError as e:
+    raise ImportError(
+        "OracleMemoryService requires python-oracledb. Install adk-oracledb "
+        "with its base dependencies."
+    ) from e
+  return oracledb
 
 
 def _content_to_text(content: types.Content | None) -> str:
@@ -118,23 +131,32 @@ def _search_result_to_memory_entry(result: Any) -> MemoryEntry:
   record = getattr(result, "record", None)
   text = getattr(record, "content", None)
   if text is None:
-    text = getattr(result, "content", "") or ""
+    text = getattr(result, "content", None)
+  if text is None:
+    text = getattr(result, "formatted_content", None)
+  if text is None:
+    text = ""
 
   custom_metadata: dict[str, Any] = {}
   record_metadata = getattr(record, "metadata", None)
   if isinstance(record_metadata, Mapping):
     custom_metadata.update(record_metadata)
 
+  result_metadata = getattr(result, "metadata", None)
+  if isinstance(result_metadata, Mapping):
+    custom_metadata.update(result_metadata)
+
   distance = getattr(result, "distance", None)
   if distance is not None:
     custom_metadata["distance"] = distance
 
-  record_type = getattr(record, "record_type", None)
-  if record_type is not None:
-    custom_metadata["record_type"] = record_type
+  for key in ("record_type", "thread_id", "user_id", "agent_id", "role"):
+    value = getattr(record, key, None)
+    if value is not None:
+      custom_metadata[key] = value
 
   return MemoryEntry(
-      id=getattr(record, "id", None) or getattr(result, "id", None),
+      id=getattr(result, "id", None) or getattr(record, "id", None),
       content=types.Content(
           role="user", parts=[types.Part(text=str(text))]
       ),
@@ -191,6 +213,71 @@ class OracleMemoryService(BaseMemoryService):
     self._config = config
     self._client = None
     self._pool = None
+    self._client_lock = asyncio.Lock()
+
+  def _create_pool_sync(self) -> Any:
+    oracledb = _load_oracledb()
+    return oracledb.create_pool(
+        user=self._config.user,
+        password=self._config.password,
+        dsn=self._config.dsn,
+        min=self._config.pool_min,
+        max=self._config.pool_max,
+        increment=1,
+    )
+
+  def _build_embedder(self, embedder_cls: Any) -> Any:
+    if not self._config.embedder_model or not self._config.embedder_model.strip():
+      raise ValueError(
+          "OracleMemoryServiceConfig.embedder_model is required for "
+          "oracleagentmemory search."
+      )
+
+    kwargs: dict[str, Any] = {"model": self._config.embedder_model}
+    if self._config.embedder_api_base is not None:
+      kwargs["api_base"] = self._config.embedder_api_base
+    if self._config.embedder_api_key is not None:
+      kwargs["api_key"] = self._config.embedder_api_key
+    return embedder_cls(**kwargs)
+
+  def _build_llm(self, llm_cls: Any) -> Any | None:
+    if not self._config.llm_model or not self._config.llm_model.strip():
+      return None
+
+    kwargs: dict[str, Any] = {"model": self._config.llm_model}
+    if self._config.llm_api_base is not None:
+      kwargs["api_base"] = self._config.llm_api_base
+    if self._config.llm_api_key is not None:
+      kwargs["api_key"] = self._config.llm_api_key
+    return llm_cls(**kwargs)
+
+  def _create_client_sync(self) -> Any:
+    OracleAgentMemory, _, _, Embedder, Llm = _load_oracleagentmemory()
+    if self._pool is None:
+      self._pool = self._create_pool_sync()
+
+    embedder = self._build_embedder(Embedder)
+    llm = self._build_llm(Llm)
+    kwargs: dict[str, Any] = {
+        "connection": self._pool,
+        "embedder": embedder,
+        "extract_memories": self._config.extract_memories,
+        "schema_policy": self._config.schema_policy,
+        "table_name_prefix": self._config.table_name_prefix,
+    }
+    if llm is not None:
+      kwargs["llm"] = llm
+
+    return OracleAgentMemory(**kwargs)
+
+  async def _get_client(self) -> Any:
+    if self._client is not None:
+      return self._client
+
+    async with self._client_lock:
+      if self._client is None:
+        self._client = await asyncio.to_thread(self._create_client_sync)
+      return self._client
 
   @override
   async def add_session_to_memory(self, session: Session) -> None:
@@ -203,9 +290,35 @@ class OracleMemoryService(BaseMemoryService):
   async def search_memory(
       self, *, app_name: str, user_id: str, query: str
   ) -> SearchMemoryResponse:
-    raise NotImplementedError(
-        "OracleMemoryService.search_memory is pending oracleagentmemory "
-        "search wiring."
+    app_name = app_name.strip()
+    user_id = user_id.strip()
+    query = query.strip()
+    if not app_name:
+      raise ValueError("app_name must not be empty")
+    if not user_id:
+      raise ValueError("user_id must not be empty")
+    if not query:
+      raise ValueError("query must not be empty")
+
+    client = await self._get_client()
+    search_kwargs: dict[str, Any] = {
+        "user_id": user_id,
+        "agent_id": app_name,
+        "exact_user_match": True,
+        "exact_agent_match": True,
+        "max_results": self._config.search_top_k,
+    }
+    if self._config.record_types is not None:
+      search_kwargs["record_types"] = self._config.record_types
+
+    search_async = getattr(client, "search_async", None)
+    if search_async is not None and inspect.iscoroutinefunction(search_async):
+      results = await search_async(query, **search_kwargs)
+    else:
+      results = await asyncio.to_thread(client.search, query, **search_kwargs)
+
+    return SearchMemoryResponse(
+        memories=[_search_result_to_memory_entry(result) for result in results]
     )
 
   @override

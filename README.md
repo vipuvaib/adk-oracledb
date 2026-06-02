@@ -41,8 +41,8 @@ The 3.4.2 check is useful because Oracle memory work will integrate through `ora
 
 ## OracleMemoryService Status
 
-`OracleMemoryService` has an initial skeleton, but real memory ingestion and
-search are still pending `oracleagentmemory` client wiring and smoke tests.
+`OracleMemoryService` has initial client/search wiring. Real memory ingestion
+methods and full smoke tests are still pending.
 
 Install memory dependencies with:
 
