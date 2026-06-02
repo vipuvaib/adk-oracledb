@@ -39,4 +39,15 @@ state.
 OracleSessionService smoke tests have passed locally against Oracle Database Free with `python-oracledb` 4.0.1 and 3.4.2.
 The 3.4.2 check is useful because Oracle memory work will integrate through `oracleagentmemory`, which currently uses the `python-oracledb` 3.x dependency line.
 
-Memory, artifacts, registry, and MCP tools are not implemented yet.
+## OracleMemoryService Status
+
+`OracleMemoryService` has an initial skeleton, but real memory ingestion and
+search are still pending `oracleagentmemory` client wiring and smoke tests.
+
+Install memory dependencies with:
+
+```bash
+pip install "adk-oracledb[memory]"
+```
+
+Artifacts, registry, and MCP tools are not implemented yet.

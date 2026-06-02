@@ -14,5 +14,10 @@ dependencies = [
     "oracledb",
 ]
 
+[project.optional-dependencies]
+memory = [
+    "oracleagentmemory==26.4.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
