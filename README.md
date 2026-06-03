@@ -156,3 +156,20 @@ Passwords with special characters must be URL-encoded. The memory URI requires
 the memory extra and an `embedder_model` query parameter. Avoid putting API keys
 directly in shell history; prefer provider environment variables such as
 `COHERE_API_KEY` when supported. Registration itself does not connect to Oracle.
+
+## ServiceRegistry Smoke Test
+
+The registry smoke test creates Oracle session, memory, and artifact services
+through ADK's ServiceRegistry using `oracle://` URIs. It requires the memory
+extra and embedding provider credentials, for example `COHERE_API_KEY`.
+
+```bash
+export ORACLE_USER=ADK_USER
+export ORACLE_PASSWORD=...
+export ORACLE_DSN=localhost:1521/FREEPDB1
+export ORACLE_MEMORY_EMBEDDER_MODEL=embed-english-light-v3.0
+export COHERE_API_KEY=...
+
+.venv/bin/python examples/registry_smoke.py
+```
+The registry smoke test has passed locally, validating oracle:// creation for session, memory, and artifact services through ADK ServiceRegistry.
