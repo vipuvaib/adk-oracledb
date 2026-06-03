@@ -41,12 +41,12 @@ CREATE INDEX ADK_ARTIFACTS_KEYS_IX
     filename
   );
 
-CREATE INDEX ADK_ARTIFACTS_VERSION_IX
+CREATE INDEX ADK_ARTIFACTS_LATEST_IX
   ON ADK_ARTIFACTS (
     app_name,
     user_id,
     scope_type,
     scope_id,
     filename_hash,
-    version
+    version DESC
   );
