@@ -57,6 +57,10 @@ pip install "adk-oracledb[memory]"
 event ingestion, and session ingestion. The current manual memory smoke test
 only verifies direct `add_memory` plus `search_memory`.
 
+The manual OracleMemoryService smoke test has passed locally using
+`oracleagentmemory` 26.4.0, `python-oracledb` 3.4.2, Oracle Database Free,
+and Cohere `embed-english-light-v3.0`.
+
 Install the memory extra in a local development checkout:
 
 ```bash
