@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
+from datetime import datetime
+from datetime import timezone
 import hashlib
 import inspect
 import json
 from pathlib import Path
 import re
 from typing import Any
+from urllib.parse import quote
 
 from adk_oracledb.connection import create_oracle_connection
 from google.adk.artifacts.base_artifact_service import ArtifactVersion
@@ -22,6 +26,7 @@ from typing_extensions import override
 _ARTIFACT_USER_SCOPE = "USER"
 _ARTIFACT_SESSION_SCOPE = "SESSION"
 _USER_SCOPE_ID = "__USER__"
+_USER_NAMESPACE_PREFIX = "user:"
 _ORACLE_ALREADY_EXISTS_CODE = 955
 _ORACLE_UNIQUE_CONSTRAINT_CODE = 1
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
@@ -94,6 +99,20 @@ def _scope_type_and_id(session_id: str | None) -> tuple[str, str]:
   return _ARTIFACT_SESSION_SCOPE, session_id
 
 
+def _is_user_scoped_filename(filename: str) -> bool:
+  return filename.startswith(_USER_NAMESPACE_PREFIX)
+
+
+def _artifact_scope_type_and_id(
+    *,
+    filename: str,
+    session_id: str | None,
+) -> tuple[str, str]:
+  if _is_user_scoped_filename(filename):
+    return _ARTIFACT_USER_SCOPE, _USER_SCOPE_ID
+  return _scope_type_and_id(session_id)
+
+
 def _validate_non_empty(value: str, name: str) -> str:
   value = value.strip()
   if not value:
@@ -103,6 +122,27 @@ def _validate_non_empty(value: str, name: str) -> str:
 
 def _filename_hash(filename: str) -> str:
   return hashlib.sha256(filename.encode("utf-8")).hexdigest()
+
+
+def _artifact_canonical_uri(
+    *,
+    app_name: str,
+    user_id: str,
+    scope_type: str,
+    scope_id: str,
+    filename: str,
+    version: int,
+) -> str:
+  encoded_app_name = quote(app_name, safe="")
+  encoded_user_id = quote(user_id, safe="")
+  encoded_scope_type = quote(scope_type.lower(), safe="")
+  encoded_scope_id = quote(scope_id, safe="")
+  encoded_filename = quote(filename, safe="")
+  return (
+      f"artifact://{encoded_app_name}/{encoded_user_id}/"
+      f"{encoded_scope_type}/{encoded_scope_id}/{encoded_filename}"
+      f"?version={version}"
+  )
 
 
 def _ensure_part(artifact: types.Part | dict[str, Any]) -> types.Part:
@@ -194,6 +234,50 @@ def _json_dump(value: dict[str, Any] | list[Any]) -> str:
     raise ValueError("artifact metadata must be JSON serializable") from e
 
 
+def _normalize_json_value(value: Any) -> Any:
+  if isinstance(value, dict):
+    return {key: _normalize_json_value(item) for key, item in value.items()}
+  if isinstance(value, list):
+    return [_normalize_json_value(item) for item in value]
+  if isinstance(value, Decimal):
+    if value == value.to_integral_value():
+      return int(value)
+    return float(value)
+  return value
+
+
+async def _json_load(value: Any) -> dict[str, Any]:
+  value = await _read_lob(value)
+  if value is None:
+    return {}
+  if isinstance(value, (bytes, bytearray)):
+    value = value.decode("utf-8")
+  if isinstance(value, str):
+    value = json.loads(value) if value else {}
+  value = _normalize_json_value(value)
+  if not isinstance(value, dict):
+    raise ValueError("Expected JSON object for artifact metadata.")
+  return value
+
+
+def _timestamp_to_float(value: Any) -> float:
+  if isinstance(value, datetime):
+    if value.tzinfo is None:
+      value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
+  return float(value)
+
+
+async def _artifact_version_from_row(row: Any) -> ArtifactVersion:
+  return ArtifactVersion(
+      version=int(row[0]),
+      canonical_uri=row[1],
+      custom_metadata=await _json_load(row[2]),
+      create_time=_timestamp_to_float(row[3]),
+      mime_type=row[4],
+  )
+
+
 class OracleArtifactServiceConfig(BaseModel):
   """Configuration for Oracle-backed ADK artifact storage."""
 
@@ -278,7 +362,10 @@ class OracleArtifactService(BaseArtifactService):
     app_name = _validate_non_empty(app_name, "app_name")
     user_id = _validate_non_empty(user_id, "user_id")
     filename = _validate_non_empty(filename, "filename")
-    scope_type, scope_id = _scope_type_and_id(session_id)
+    scope_type, scope_id = _artifact_scope_type_and_id(
+        filename=filename,
+        session_id=session_id,
+    )
     session_id_value = scope_id if scope_type == _ARTIFACT_SESSION_SCOPE else None
     filename_hash = _filename_hash(filename)
 
@@ -317,9 +404,13 @@ class OracleArtifactService(BaseArtifactService):
         )
         row = await _call(cursor.fetchone)
         version = int(row[0])
-        canonical_uri = (
-            f"artifact://{app_name}/{user_id}/{scope_type.lower()}/"
-            f"{scope_id}/{filename}?version={version}"
+        canonical_uri = _artifact_canonical_uri(
+            app_name=app_name,
+            user_id=user_id,
+            scope_type=scope_type,
+            scope_id=scope_id,
+            filename=filename,
+            version=version,
         )
 
         try:
@@ -416,7 +507,10 @@ class OracleArtifactService(BaseArtifactService):
     if version is not None and version < 0:
       raise ValueError("version must be non-negative")
 
-    scope_type, scope_id = _scope_type_and_id(session_id)
+    scope_type, scope_id = _artifact_scope_type_and_id(
+        filename=filename,
+        session_id=session_id,
+    )
     filename_hash = _filename_hash(filename)
     artifacts_table = self._artifacts_table_name()
 
@@ -482,10 +576,60 @@ class OracleArtifactService(BaseArtifactService):
   async def list_artifact_keys(
       self, *, app_name: str, user_id: str, session_id: str | None = None
   ) -> list[str]:
-    raise NotImplementedError(
-        "OracleArtifactService.list_artifact_keys is pending artifact storage "
-        "wiring."
-    )
+    app_name = _validate_non_empty(app_name, "app_name")
+    user_id = _validate_non_empty(user_id, "user_id")
+    scope_type, scope_id = _scope_type_and_id(session_id)
+    artifacts_table = self._artifacts_table_name()
+
+    await self._ensure_schema()
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      params = {
+          "app_name": app_name,
+          "user_id": user_id,
+          "user_scope_type": _ARTIFACT_USER_SCOPE,
+          "user_scope_id": _USER_SCOPE_ID,
+      }
+      if scope_type == _ARTIFACT_SESSION_SCOPE:
+        params["session_scope_type"] = scope_type
+        params["session_scope_id"] = scope_id
+        query = f"""
+          SELECT DISTINCT filename
+          FROM {artifacts_table}
+          WHERE app_name = :app_name
+            AND user_id = :user_id
+            AND (
+              (
+                scope_type = :session_scope_type
+                AND scope_id = :session_scope_id
+              )
+              OR (
+                scope_type = :user_scope_type
+                AND scope_id = :user_scope_id
+              )
+            )
+          ORDER BY filename ASC
+        """
+      else:
+        query = f"""
+          SELECT DISTINCT filename
+          FROM {artifacts_table}
+          WHERE app_name = :app_name
+            AND user_id = :user_id
+            AND scope_type = :user_scope_type
+            AND scope_id = :user_scope_id
+          ORDER BY filename ASC
+        """
+
+      await _call(cursor.execute, query, params)
+      rows = await _call(cursor.fetchall)
+      return [row[0] for row in rows]
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)
 
   @override
   async def delete_artifact(
@@ -496,10 +640,49 @@ class OracleArtifactService(BaseArtifactService):
       filename: str,
       session_id: str | None = None,
   ) -> None:
-    raise NotImplementedError(
-        "OracleArtifactService.delete_artifact is pending artifact storage "
-        "wiring."
+    app_name = _validate_non_empty(app_name, "app_name")
+    user_id = _validate_non_empty(user_id, "user_id")
+    filename = _validate_non_empty(filename, "filename")
+    scope_type, scope_id = _artifact_scope_type_and_id(
+        filename=filename,
+        session_id=session_id,
     )
+    filename_hash = _filename_hash(filename)
+    artifacts_table = self._artifacts_table_name()
+
+    await self._ensure_schema()
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      await _call(
+          cursor.execute,
+          f"""
+          DELETE FROM {artifacts_table}
+          WHERE app_name = :app_name
+            AND user_id = :user_id
+            AND scope_type = :scope_type
+            AND scope_id = :scope_id
+            AND filename_hash = :filename_hash
+            AND filename = :filename
+          """,
+          {
+              "app_name": app_name,
+              "user_id": user_id,
+              "scope_type": scope_type,
+              "scope_id": scope_id,
+              "filename_hash": filename_hash,
+              "filename": filename,
+          },
+      )
+      await _call(connection.commit)
+    except BaseException:
+      await _rollback(connection)
+      raise
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)
 
   @override
   async def list_versions(
@@ -510,10 +693,49 @@ class OracleArtifactService(BaseArtifactService):
       filename: str,
       session_id: str | None = None,
   ) -> list[int]:
-    raise NotImplementedError(
-        "OracleArtifactService.list_versions is pending artifact storage "
-        "wiring."
+    app_name = _validate_non_empty(app_name, "app_name")
+    user_id = _validate_non_empty(user_id, "user_id")
+    filename = _validate_non_empty(filename, "filename")
+    scope_type, scope_id = _artifact_scope_type_and_id(
+        filename=filename,
+        session_id=session_id,
     )
+    filename_hash = _filename_hash(filename)
+    artifacts_table = self._artifacts_table_name()
+
+    await self._ensure_schema()
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      await _call(
+          cursor.execute,
+          f"""
+          SELECT version
+          FROM {artifacts_table}
+          WHERE app_name = :app_name
+            AND user_id = :user_id
+            AND scope_type = :scope_type
+            AND scope_id = :scope_id
+            AND filename_hash = :filename_hash
+            AND filename = :filename
+          ORDER BY version ASC
+          """,
+          {
+              "app_name": app_name,
+              "user_id": user_id,
+              "scope_type": scope_type,
+              "scope_id": scope_id,
+              "filename_hash": filename_hash,
+              "filename": filename,
+          },
+      )
+      rows = await _call(cursor.fetchall)
+      return [int(row[0]) for row in rows]
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)
 
   @override
   async def list_artifact_versions(
@@ -524,10 +746,49 @@ class OracleArtifactService(BaseArtifactService):
       filename: str,
       session_id: str | None = None,
   ) -> list[ArtifactVersion]:
-    raise NotImplementedError(
-        "OracleArtifactService.list_artifact_versions is pending artifact "
-        "storage wiring."
+    app_name = _validate_non_empty(app_name, "app_name")
+    user_id = _validate_non_empty(user_id, "user_id")
+    filename = _validate_non_empty(filename, "filename")
+    scope_type, scope_id = _artifact_scope_type_and_id(
+        filename=filename,
+        session_id=session_id,
     )
+    filename_hash = _filename_hash(filename)
+    artifacts_table = self._artifacts_table_name()
+
+    await self._ensure_schema()
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      await _call(
+          cursor.execute,
+          f"""
+          SELECT version, canonical_uri, custom_metadata, create_time, mime_type
+          FROM {artifacts_table}
+          WHERE app_name = :app_name
+            AND user_id = :user_id
+            AND scope_type = :scope_type
+            AND scope_id = :scope_id
+            AND filename_hash = :filename_hash
+            AND filename = :filename
+          ORDER BY version ASC
+          """,
+          {
+              "app_name": app_name,
+              "user_id": user_id,
+              "scope_type": scope_type,
+              "scope_id": scope_id,
+              "filename_hash": filename_hash,
+              "filename": filename,
+          },
+      )
+      rows = await _call(cursor.fetchall)
+      return [await _artifact_version_from_row(row) for row in rows]
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)
 
   @override
   async def get_artifact_version(
@@ -539,7 +800,68 @@ class OracleArtifactService(BaseArtifactService):
       session_id: str | None = None,
       version: int | None = None,
   ) -> ArtifactVersion | None:
-    raise NotImplementedError(
-        "OracleArtifactService.get_artifact_version is pending artifact "
-        "storage wiring."
+    app_name = _validate_non_empty(app_name, "app_name")
+    user_id = _validate_non_empty(user_id, "user_id")
+    filename = _validate_non_empty(filename, "filename")
+    if version is not None and version < 0:
+      raise ValueError("version must be non-negative")
+
+    scope_type, scope_id = _artifact_scope_type_and_id(
+        filename=filename,
+        session_id=session_id,
     )
+    filename_hash = _filename_hash(filename)
+    artifacts_table = self._artifacts_table_name()
+
+    await self._ensure_schema()
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      params: dict[str, Any] = {
+          "app_name": app_name,
+          "user_id": user_id,
+          "scope_type": scope_type,
+          "scope_id": scope_id,
+          "filename_hash": filename_hash,
+          "filename": filename,
+      }
+      if version is None:
+        query = f"""
+          SELECT version, canonical_uri, custom_metadata, create_time, mime_type
+          FROM (
+            SELECT version, canonical_uri, custom_metadata, create_time, mime_type
+            FROM {artifacts_table}
+            WHERE app_name = :app_name
+              AND user_id = :user_id
+              AND scope_type = :scope_type
+              AND scope_id = :scope_id
+              AND filename_hash = :filename_hash
+              AND filename = :filename
+            ORDER BY version DESC
+          )
+          WHERE ROWNUM <= 1
+        """
+      else:
+        params["version"] = version
+        query = f"""
+          SELECT version, canonical_uri, custom_metadata, create_time, mime_type
+          FROM {artifacts_table}
+          WHERE app_name = :app_name
+            AND user_id = :user_id
+            AND scope_type = :scope_type
+            AND scope_id = :scope_id
+            AND filename_hash = :filename_hash
+            AND filename = :filename
+            AND version = :version
+        """
+
+      await _call(cursor.execute, query, params)
+      row = await _call(cursor.fetchone)
+      if row is None:
+        return None
+      return await _artifact_version_from_row(row)
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)

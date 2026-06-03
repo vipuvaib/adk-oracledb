@@ -107,6 +107,6 @@ Artifacts, registry, and MCP tools are not implemented yet.
 
 ## OracleArtifactService Status
 
-`OracleArtifactService` has initial schema, `save_artifact`, and
-`load_artifact` wiring. Listing, deletion, version metadata methods, and smoke
-tests are not implemented yet.
+`OracleArtifactService` has initial schema, save/load, list/delete, and version
+metadata wiring. Manual artifact operation smoke has passed locally. A reusable
+artifact smoke script is not added yet.
