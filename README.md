@@ -104,3 +104,8 @@ export ORACLE_MEMORY_LLM_API_KEY=...
 ```
 
 Artifacts, registry, and MCP tools are not implemented yet.
+
+## OracleArtifactService Status
+
+`OracleArtifactService` skeleton and schema are being added. Artifact
+persistence methods and smoke tests are not implemented yet.
