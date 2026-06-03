@@ -103,7 +103,7 @@ export ORACLE_MEMORY_LLM_API_BASE=...
 export ORACLE_MEMORY_LLM_API_KEY=...
 ```
 
-Artifacts, registry, and MCP tools are not implemented yet.
+MCP tools are not implemented yet.
 
 ## OracleArtifactService Status
 
@@ -131,3 +131,28 @@ The reusable OracleArtifactService smoke test has passed locally against Oracle 
 The smoke script verifies text artifact versioning, binary `inline_data`
 round-trip, ADK `user:` namespace behavior, key listing, version metadata, and
 delete behavior.
+
+## ServiceRegistry oracle:// Support
+
+To use `oracle://` URIs with ADK CLI service options, register the Oracle
+factories from your agent's `services.py`:
+
+```python
+from adk_oracledb.registry import register_oracle_services
+
+register_oracle_services()
+```
+
+Then run ADK with Oracle-backed services:
+
+```bash
+adk web my_agent \
+  --session_service_uri 'oracle://ADK_USER:...@localhost:1521/FREEPDB1?table_prefix=ADK' \
+  --memory_service_uri 'oracle://ADK_USER:...@localhost:1521/FREEPDB1?memory_table_prefix=ADK_MEMORY&embedder_model=embed-english-light-v3.0' \
+  --artifact_service_uri 'oracle://ADK_USER:...@localhost:1521/FREEPDB1?artifact_table_prefix=ADK_ART'
+```
+
+Passwords with special characters must be URL-encoded. The memory URI requires
+the memory extra and an `embedder_model` query parameter. Avoid putting API keys
+directly in shell history; prefer provider environment variables such as
+`COHERE_API_KEY` when supported. Registration itself does not connect to Oracle.
