@@ -108,5 +108,26 @@ Artifacts, registry, and MCP tools are not implemented yet.
 ## OracleArtifactService Status
 
 `OracleArtifactService` has initial schema, save/load, list/delete, and version
-metadata wiring. Manual artifact operation smoke has passed locally. A reusable
-artifact smoke script is not added yet.
+metadata wiring. Manual artifact operation smoke has passed locally.
+
+## OracleArtifactService Smoke Test
+
+Configure Oracle connection settings:
+
+```bash
+export ORACLE_USER=ADK_USER
+export ORACLE_PASSWORD=...
+export ORACLE_DSN=localhost:1521/FREEPDB1
+export ORACLE_ARTIFACT_TABLE_PREFIX=ADK_ART_SMOKE
+```
+
+Run the artifact smoke test from the repository root:
+
+```bash
+.venv/bin/python examples/artifact_smoke.py
+```
+The reusable OracleArtifactService smoke test has passed locally against Oracle Database Free.
+
+The smoke script verifies text artifact versioning, binary `inline_data`
+round-trip, ADK `user:` namespace behavior, key listing, version metadata, and
+delete behavior.
