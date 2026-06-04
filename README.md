@@ -173,3 +173,9 @@ export COHERE_API_KEY=...
 .venv/bin/python examples/registry_smoke.py
 ```
 The registry smoke test has passed locally, validating oracle:// creation for session, memory, and artifact services through ADK ServiceRegistry.
+
+## Full ADK Agent Examples
+
+`examples/full_agent_oracle` shows registry-backed Oracle services with a small
+loadable ADK agent. `examples/full_agent_oracle_tools` adds explicit
+memory/artifact tool usage for durable travel preferences and saved itineraries.
