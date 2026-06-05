@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from pathlib import Path
 from typing import Any
 import uuid
 
@@ -10,6 +11,7 @@ from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
 _MAX_INLINE_BINARY_RESPONSE_BYTES = 200_000
+_EXPORTS_DIR = Path(__file__).resolve().parent / "exports"
 
 
 def _require_text(value: str, name: str) -> str:
@@ -37,6 +39,23 @@ def _ensure_pdf_filename(filename: str) -> str:
   if not filename.lower().endswith(".pdf"):
     filename = f"{filename}.pdf"
   return filename
+
+
+def _companion_text_filename_for_pdf(filename: str) -> str:
+  filename = _ensure_pdf_filename(filename)
+  return f"{filename[:-4]}.txt"
+
+
+def _safe_export_path(output_filename: str) -> Path:
+  output_filename = _require_text(output_filename, "output_filename")
+  requested = Path(output_filename)
+  if requested.is_absolute() or ".." in requested.parts:
+    raise ValueError("output_filename must be a safe relative filename")
+  safe_name = requested.name
+  if not safe_name or safe_name in {".", ".."}:
+    raise ValueError("output_filename must include a filename")
+  _EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+  return _EXPORTS_DIR / safe_name
 
 
 def _memory_entry_text(memory: MemoryEntry) -> str:
@@ -212,7 +231,7 @@ async def plan_trip(
     interests: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Plans a deterministic trip using relevant stored travel preferences."""
+  """Builds a planning brief using relevant stored travel preferences."""
   destination = _require_text(destination, "destination")
   days = _require_positive_int(days, "days")
   budget = _require_text(budget, "budget")
@@ -225,31 +244,27 @@ async def plan_trip(
       if snippets
       else "- No stored travel preferences found for this query."
   )
-
-  day_lines = []
-  for day in range(1, days + 1):
-    if day == 1:
-      activity = f"Arrive in {destination}, settle in, and take an easy orientation walk."
-    elif day == days:
-      activity = "Keep the morning flexible for a favorite repeat stop, then depart."
-    elif day % 3 == 0:
-      activity = f"Focus on {interests} with a guided local experience."
-    elif day % 2 == 0:
-      activity = "Balance a scenic outdoor block with a relaxed local meal."
-    else:
-      activity = "Visit a cultural neighborhood, market, or museum at a steady pace."
-    day_lines.append(f"Day {day}: {activity}")
-
-  itinerary = (
-      f"{days}-day {budget} trip to {destination}\n"
-      f"Interests: {interests}\n\n"
-      "Stored preferences used:\n"
+  structure = [
+      "Arrival, recovery, and orientation",
+      "Signature culture/history day",
+      "Primary nature or adventure day",
+      "Local food, markets, and neighborhoods",
+      "Flexible buffer for weather, transit, or energy level",
+      "Departure with one low-effort highlight",
+  ]
+  planning_brief = (
+      f"Planning brief for a rich {days}-day {budget} trip to {destination}\n"
+      f"Traveler interests: {interests}\n\n"
+      "Memory context to consider, not blindly copy:\n"
       f"{preference_block}\n\n"
-      "Plan:\n"
-      + "\n".join(day_lines)
+      "Suggested itinerary structure:\n"
+      + "\n".join(f"- {item}" for item in structure)
       + "\n\n"
-      "Notes: Keep transit buffers, book high-demand activities early, and "
-      "reserve one flexible block for weather or energy level."
+      "Write the final itinerary using current travel knowledge. Include "
+      "morning, afternoon, and evening blocks for each day; practical transit "
+      "and pacing notes; food ideas; budget-sensitive choices; and where the "
+      "stored preferences influenced the plan. Do not treat memory as the only "
+      "source of travel knowledge."
   )
   return {
       "destination": destination,
@@ -257,7 +272,9 @@ async def plan_trip(
       "budget": budget,
       "interests": interests,
       "used_memory_count": len(snippets),
-      "itinerary": itinerary,
+      "recalled_preferences": snippets,
+      "planning_brief": planning_brief,
+      "itinerary": planning_brief,
   }
 
 
@@ -368,6 +385,12 @@ async def load_artifact(
       result["base64_data"] = base64.b64encode(payload).decode("ascii")
     else:
       result["message"] = "Artifact is too large to inline in the response."
+    if artifact.inline_data.mime_type == "application/pdf" and filename.lower().endswith(".pdf"):
+      companion_filename = _companion_text_filename_for_pdf(filename)
+      companion = await tool_context.load_artifact(companion_filename)
+      if companion is not None and companion.text is not None:
+        result["companion_text_filename"] = companion_filename
+        result["companion_text"] = companion.text
     return result
   return {
       "status": "loaded",
@@ -414,8 +437,10 @@ async def generate_and_save_itinerary_pdf(
 ) -> dict[str, object]:
   """Generates a simple PDF from itinerary text and saves it as an artifact."""
   filename = _ensure_pdf_filename(filename)
+  companion_filename = _companion_text_filename_for_pdf(filename)
+  itinerary = _require_text(itinerary, "itinerary")
   pdf_bytes = _simple_pdf_bytes(title=title, body=itinerary)
-  version = await tool_context.save_artifact(
+  pdf_version = await tool_context.save_artifact(
       filename,
       types.Part(
           inline_data=types.Blob(
@@ -428,10 +453,72 @@ async def generate_and_save_itinerary_pdf(
           "kind": "itinerary_pdf",
       },
   )
+  companion_version = await tool_context.save_artifact(
+      companion_filename,
+      types.Part.from_text(text=itinerary),
+      custom_metadata={
+          "source": "oracle_tools_agent",
+          "kind": "itinerary_pdf_companion_text",
+          "pdf_filename": filename,
+      },
+  )
   return {
       "status": "saved",
       "filename": filename,
-      "version": version,
+      "version": pdf_version,
+      "pdf_filename": filename,
+      "pdf_version": pdf_version,
+      "companion_text_filename": companion_filename,
+      "companion_text_version": companion_version,
       "mime_type": "application/pdf",
       "size": len(pdf_bytes),
+  }
+
+
+async def export_artifact_to_file(
+    filename: str,
+    output_filename: str,
+    tool_context: ToolContext,
+) -> dict[str, object]:
+  """Exports a saved artifact to the local example exports directory."""
+  filename = _require_text(filename, "filename")
+  output_path = _safe_export_path(output_filename)
+  artifact = await tool_context.load_artifact(filename)
+  if artifact is None:
+    return {
+        "status": "not_found",
+        "source_filename": filename,
+        "output_path": str(output_path),
+    }
+
+  if artifact.text is not None:
+    payload = artifact.text.encode("utf-8")
+    output_path.write_bytes(payload)
+    return {
+        "status": "exported",
+        "source_filename": filename,
+        "output_path": str(output_path),
+        "kind": "text",
+        "mime_type": "text/plain",
+        "size": len(payload),
+    }
+
+  if artifact.inline_data is not None:
+    payload = _blob_data_to_bytes(artifact.inline_data.data)
+    output_path.write_bytes(payload)
+    return {
+        "status": "exported",
+        "source_filename": filename,
+        "output_path": str(output_path),
+        "kind": "inline_data",
+        "mime_type": artifact.inline_data.mime_type,
+        "size": len(payload),
+    }
+
+  return {
+      "status": "unsupported",
+      "source_filename": filename,
+      "output_path": str(output_path),
+      "kind": "unsupported",
+      "size": 0,
   }

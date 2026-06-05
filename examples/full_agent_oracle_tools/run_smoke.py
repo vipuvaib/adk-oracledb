@@ -24,6 +24,7 @@ from google.adk.cli.service_registry import get_service_registry
 from google.adk.cli.service_registry import load_services_module
 from google.adk.cli.utils.agent_loader import AgentLoader
 
+from tools import export_artifact_to_file
 from tools import generate_and_save_itinerary_pdf
 from tools import load_artifact
 from tools import load_itinerary_artifact
@@ -183,8 +184,8 @@ def _load_agent_and_services() -> None:
   if getattr(root_agent, "name", None) != "oracle_tools_agent":
     _fail("ADK AgentLoader did not load the oracle_tools_agent root_agent")
   tools = getattr(root_agent, "tools", []) or []
-  if len(tools) < 9:
-    _fail(f"Expected at least 9 tools on oracle_tools_agent, found {len(tools)}")
+  if len(tools) < 10:
+    _fail(f"Expected at least 10 tools on oracle_tools_agent, found {len(tools)}")
   print("oracle tools agent services.py registration loaded")
   print(f"loaded ADK root agent: {root_agent.name}")
 
@@ -256,18 +257,39 @@ async def _planning_smoke(
       interests="trekking and cultural experiences",
       tool_context=tool_context,
   )
-  itinerary = str(result["itinerary"])
-  lower_itinerary = itinerary.lower()
-  if "nepal" not in lower_itinerary:
-    _fail("plan_trip itinerary did not mention Nepal")
-  if "8-day" not in lower_itinerary and "day 8" not in lower_itinerary:
-    _fail("plan_trip itinerary did not include the requested duration")
-  if "trekking" not in lower_itinerary:
-    _fail("plan_trip itinerary did not include trekking")
-  if "cultural" not in lower_itinerary and "culture" not in lower_itinerary:
-    _fail("plan_trip itinerary did not include cultural interests")
-  if int(result["used_memory_count"]) < 1 and smoke_id.lower() not in lower_itinerary:
+  planning_brief = str(result["planning_brief"])
+  lower_brief = planning_brief.lower()
+  if "nepal" not in lower_brief:
+    _fail("plan_trip planning brief did not mention Nepal")
+  if "8-day" not in lower_brief:
+    _fail("plan_trip planning brief did not include the requested duration")
+  if "trekking" not in lower_brief:
+    _fail("plan_trip planning brief did not include trekking")
+  if "cultural" not in lower_brief and "culture" not in lower_brief:
+    _fail("plan_trip planning brief did not include cultural interests")
+  if int(result["used_memory_count"]) < 1 and smoke_id.lower() not in lower_brief:
     _fail("plan_trip did not use the stored travel preference")
+  itinerary = (
+      "8-day mid-budget Nepal itinerary using stored preferences\n\n"
+      f"{planning_brief}\n\n"
+      "Detailed itinerary:\n"
+      "Day 1: Morning arrival in Kathmandu; afternoon Thamel orientation; "
+      "evening Nepali dinner.\n"
+      "Day 2: Morning Swayambhunath; afternoon Patan Durbar Square; evening "
+      "Newari food walk.\n"
+      "Day 3: Morning drive toward Pokhara; afternoon lakeside walk; evening "
+      "trek briefing.\n"
+      "Day 4: Morning foothill trek; afternoon village homestay; evening local "
+      "meal.\n"
+      "Day 5: Morning sunrise viewpoint; afternoon return to Pokhara; evening "
+      "rest by Phewa Lake.\n"
+      "Day 6: Morning peace pagoda or cave visit; afternoon free buffer; "
+      "evening casual lakeside dinner.\n"
+      "Day 7: Morning return to Kathmandu; afternoon Boudhanath; evening "
+      "packing and tea.\n"
+      "Day 8: Morning low-effort market visit; afternoon departure buffer; "
+      "evening flight or final dinner.\n"
+  )
   print("oracle tools planning smoke passed")
   return itinerary
 
@@ -314,7 +336,7 @@ async def _text_artifact_smoke(
 
 async def _pdf_artifact_smoke(
     tool_context: SmokeToolContext, smoke_id: str, itinerary: str
-) -> None:
+) -> str:
   filename = f"user:oracle-tools-itinerary-{smoke_id}.pdf"
   save_result = await generate_and_save_itinerary_pdf(
       filename=filename,
@@ -324,6 +346,9 @@ async def _pdf_artifact_smoke(
   )
   if save_result["status"] != "saved":
     _fail(f"generate_and_save_itinerary_pdf failed: {save_result}")
+  companion_filename = str(save_result["companion_text_filename"])
+  if not companion_filename.endswith(".txt"):
+    _fail(f"PDF companion text filename was not returned: {save_result}")
   load_result = await load_artifact(
       filename=filename,
       tool_context=tool_context,
@@ -337,7 +362,30 @@ async def _pdf_artifact_smoke(
   pdf_bytes = base64.b64decode(str(load_result["base64_data"]))
   if not pdf_bytes.startswith(b"%PDF"):
     _fail("PDF artifact bytes did not start with %PDF")
+  if load_result.get("companion_text_filename") != companion_filename:
+    _fail("PDF load did not include the companion text filename")
+  if load_result.get("companion_text") != itinerary:
+    _fail("PDF load did not include the companion text")
   print("oracle tools pdf artifact smoke passed")
+  return filename
+
+
+async def _pdf_export_smoke(
+    tool_context: SmokeToolContext, smoke_id: str, filename: str
+) -> None:
+  export_result = await export_artifact_to_file(
+      filename=filename,
+      output_filename=f"oracle-tools-itinerary-{smoke_id}.pdf",
+      tool_context=tool_context,
+  )
+  if export_result["status"] != "exported":
+    _fail(f"export_artifact_to_file failed for PDF: {export_result}")
+  output_path = Path(str(export_result["output_path"]))
+  if not output_path.exists():
+    _fail(f"PDF export path does not exist: {output_path}")
+  if not output_path.read_bytes().startswith(b"%PDF"):
+    _fail("exported PDF bytes did not start with %PDF")
+  print("oracle tools pdf export smoke passed")
 
 
 async def _image_artifact_smoke(
@@ -361,6 +409,16 @@ async def _image_artifact_smoke(
   png_bytes = base64.b64decode(str(load_result["base64_data"]))
   if png_bytes != TINY_PNG_BYTES:
     _fail("PNG artifact bytes did not round-trip")
+  export_result = await export_artifact_to_file(
+      filename=filename,
+      output_filename=f"oracle-tools-pixel-{smoke_id}.png",
+      tool_context=tool_context,
+  )
+  if export_result["status"] != "exported":
+    _fail(f"export_artifact_to_file failed for PNG: {export_result}")
+  exported_png = Path(str(export_result["output_path"])).read_bytes()
+  if exported_png != TINY_PNG_BYTES:
+    _fail("exported PNG bytes did not match expected bytes")
   print("oracle tools image artifact smoke passed")
 
 
@@ -386,6 +444,16 @@ async def _binary_artifact_smoke(
   loaded_payload = base64.b64decode(str(load_result["base64_data"]))
   if loaded_payload != payload:
     _fail("binary artifact bytes did not round-trip")
+  export_result = await export_artifact_to_file(
+      filename=filename,
+      output_filename=f"oracle-tools-binary-{smoke_id}.bin",
+      tool_context=tool_context,
+  )
+  if export_result["status"] != "exported":
+    _fail(f"export_artifact_to_file failed for binary: {export_result}")
+  exported_payload = Path(str(export_result["output_path"])).read_bytes()
+  if exported_payload != payload:
+    _fail("exported binary bytes did not match expected bytes")
   print("oracle tools binary artifact smoke passed")
 
 
@@ -397,7 +465,8 @@ async def main() -> None:
     await _memory_tool_smoke(tool_context, smoke_id)
     itinerary = await _planning_smoke(tool_context, smoke_id)
     await _text_artifact_smoke(tool_context, smoke_id, itinerary)
-    await _pdf_artifact_smoke(tool_context, smoke_id, itinerary)
+    pdf_filename = await _pdf_artifact_smoke(tool_context, smoke_id, itinerary)
+    await _pdf_export_smoke(tool_context, smoke_id, pdf_filename)
     await _image_artifact_smoke(tool_context, smoke_id)
     await _binary_artifact_smoke(tool_context, smoke_id)
   finally:
