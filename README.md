@@ -178,4 +178,5 @@ The registry smoke test has passed locally, validating oracle:// creation for se
 
 `examples/full_agent_oracle` shows registry-backed Oracle services with a small
 loadable ADK agent. `examples/full_agent_oracle_tools` adds explicit
-memory/artifact tool usage for durable travel preferences and saved itineraries.
+memory/artifact tool usage, travel planning, and text/PDF/image/binary artifact
+round trips.

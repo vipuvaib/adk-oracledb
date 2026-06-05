@@ -7,10 +7,26 @@ artifacts:
 
 - `remember_travel_preference` writes directly to `OracleMemoryService`.
 - `recall_travel_preferences` searches `OracleMemoryService`.
-- `save_itinerary_artifact` saves a text artifact with `OracleArtifactService`.
-- `load_itinerary_artifact` loads the saved artifact.
+- `plan_trip` creates a deterministic itinerary using recalled preferences.
+- `save_text_artifact` and `save_itinerary_artifact` save text artifacts.
+- `generate_and_save_itinerary_pdf` stores a generated PDF artifact.
+- `save_base64_artifact` stores PDF, image, or generic file bytes.
+- `load_artifact` loads text and binary artifacts.
 
 The tools use ADK `ToolContext` public APIs for memory and artifacts.
+
+Long-term memory is app + user scoped by `OracleMemoryService`. Session context
+is separate from long-term memory; session state/events remain in
+`OracleSessionService`.
+
+Normal artifact filenames are session scoped. Filenames beginning with `user:`
+are user scoped and can be loaded across sessions for the same app/user. PDF,
+image, and binary artifact support uses `inline_data` bytes stored by
+`OracleArtifactService`.
+
+The interactive agent can save PDFs/images only through tools that generate
+bytes or receive base64 data. File upload support from ADK web UI is separate
+future work and may require inspecting ADK file-upload pathways.
 
 ## Required Environment
 
@@ -52,6 +68,15 @@ The smoke script does not call an LLM. It loads the agent, registers
 through ADK `ServiceRegistry`, and calls the tool functions directly with a
 minimal context adapter backed by the registry-created Oracle services.
 
+The smoke covers:
+
+- memory write/search
+- preference-aware trip planning
+- text artifact round-trip
+- generated PDF artifact round-trip
+- PNG image artifact round-trip
+- generic binary artifact round-trip
+
 ## Run With ADK
 
 `adk run` loads this folder's `services.py`, so the Oracle factories are
@@ -78,3 +103,16 @@ adk web examples \
 Passwords with special characters must be URL-encoded. Interactive ADK runs may
 require normal model/provider credentials in addition to memory embedder
 credentials.
+
+## Interactive Prompts
+
+Try prompts like:
+
+```text
+Remember that I prefer 8-day trips with trekking and cultural experiences.
+Plan an 8-day mid-budget trip to Nepal using my preferences.
+Save that itinerary as user:nepal_itinerary.
+Generate and save that itinerary as PDF named user:nepal_itinerary.pdf.
+Load user:nepal_itinerary.
+Load user:nepal_itinerary.pdf.
+```
