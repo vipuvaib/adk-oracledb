@@ -129,6 +129,43 @@ def _memory_result_text(result: dict[str, object]) -> str:
   return "\n".join(snippets).lower()
 
 
+def _preview(value: object, *, limit: int = 180) -> str:
+  text = "" if value is None else str(value)
+  text = text.replace("\n", "\\n")
+  if len(text) > limit:
+    return f"{text[:limit]}..."
+  return text
+
+
+def _result_keys(result: object) -> str:
+  if not isinstance(result, dict):
+    return f"<{type(result).__name__}>"
+  return ", ".join(sorted(str(key) for key in result.keys()))
+
+
+def _artifact_text_failure(
+    *,
+    message: str,
+    original_filename: str,
+    saved_filename: str,
+    load_result: object,
+    expected_text: str,
+) -> str:
+  status = load_result.get("status") if isinstance(load_result, dict) else None
+  loaded_text = load_result.get("text") if isinstance(load_result, dict) else None
+  return (
+      f"{message}\n"
+      f"original filename: {original_filename}\n"
+      f"saved filename: {saved_filename}\n"
+      f"load_result status: {status}\n"
+      f"load_result keys: {_result_keys(load_result)}\n"
+      f"expected text length: {len(expected_text)}\n"
+      f"loaded text length: {len(loaded_text) if loaded_text is not None else 'None'}\n"
+      f"expected text preview: {_preview(expected_text)}\n"
+      f"loaded text preview: {_preview(loaded_text)}"
+  )
+
+
 @dataclass
 class SmokeToolContext:
   app_name: str
@@ -297,7 +334,7 @@ async def _planning_smoke(
 async def _text_artifact_smoke(
     tool_context: SmokeToolContext, smoke_id: str, itinerary: str
 ) -> None:
-  filename = f"user:oracle-tools-itinerary-{smoke_id}"
+  filename = f"user:oracle-tools-text-itinerary-{smoke_id}"
   save_result = await save_text_artifact(
       filename=filename,
       text=itinerary,
@@ -314,11 +351,35 @@ async def _text_artifact_smoke(
       tool_context=tool_context,
   )
   if load_result["status"] != "loaded":
-    _fail(f"load_artifact failed for text artifact: {load_result}")
+    _fail(
+        _artifact_text_failure(
+            message="load_artifact failed for text artifact",
+            original_filename=filename,
+            saved_filename=saved_filename,
+            load_result=load_result,
+            expected_text=itinerary,
+        )
+    )
   if load_result["kind"] != "text":
-    _fail(f"load_artifact returned wrong kind for text: {load_result}")
+    _fail(
+        _artifact_text_failure(
+            message="load_artifact returned wrong kind for text artifact",
+            original_filename=filename,
+            saved_filename=saved_filename,
+            load_result=load_result,
+            expected_text=itinerary,
+        )
+    )
   if load_result["text"] != itinerary:
-    _fail("load_artifact did not return the saved text itinerary")
+    _fail(
+        _artifact_text_failure(
+            message="load_artifact did not return the saved text itinerary",
+            original_filename=filename,
+            saved_filename=saved_filename,
+            load_result=load_result,
+            expected_text=itinerary,
+        )
+    )
 
   itinerary_result = await save_itinerary_artifact(
       filename=f"oracle-tools-compat-itinerary-{smoke_id}",

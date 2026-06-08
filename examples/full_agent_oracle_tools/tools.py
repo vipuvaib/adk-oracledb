@@ -21,6 +21,12 @@ def _require_text(value: str, name: str) -> str:
   return text
 
 
+def _require_text_preserve(value: str, name: str) -> str:
+  if not value.strip():
+    raise ValueError(f"{name} must not be empty")
+  return value
+
+
 def _require_positive_int(value: int, name: str) -> int:
   if value <= 0:
     raise ValueError(f"{name} must be greater than 0")
@@ -285,7 +291,7 @@ async def save_text_artifact(
 ) -> dict[str, object]:
   """Saves arbitrary text as an Oracle-backed ADK artifact."""
   filename = _normalize_text_filename(filename)
-  text = _require_text(text, "text")
+  text = _require_text_preserve(text, "text")
   version = await tool_context.save_artifact(
       filename,
       types.Part.from_text(text=text),
@@ -438,7 +444,7 @@ async def generate_and_save_itinerary_pdf(
   """Generates a simple PDF from itinerary text and saves it as an artifact."""
   filename = _ensure_pdf_filename(filename)
   companion_filename = _companion_text_filename_for_pdf(filename)
-  itinerary = _require_text(itinerary, "itinerary")
+  itinerary = _require_text_preserve(itinerary, "itinerary")
   pdf_bytes = _simple_pdf_bytes(title=title, body=itinerary)
   pdf_version = await tool_context.save_artifact(
       filename,
