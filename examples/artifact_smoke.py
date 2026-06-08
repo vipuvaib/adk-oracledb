@@ -14,10 +14,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
   sys.path.insert(0, str(SRC_DIR))
+EXAMPLES_DIR = REPO_ROOT / "examples"
+if str(EXAMPLES_DIR) not in sys.path:
+  sys.path.insert(0, str(EXAMPLES_DIR))
+
+from oracle_env import load_repo_env
+from oracle_env import require_env
 
 from adk_oracledb.artifacts import OracleArtifactService
 from adk_oracledb.artifacts import OracleArtifactServiceConfig
 
+
+load_repo_env(__file__)
 
 APP_NAME = "artifact_smoke_app"
 USER_ID = "artifact_smoke_user"
@@ -27,18 +35,11 @@ def _fail(message: str) -> NoReturn:
   raise SystemExit(message)
 
 
-def _required_env(name: str) -> str:
-  value = os.environ.get(name)
-  if not value:
-    _fail(f"Missing required environment variable: {name}")
-  return value
-
-
 def _config_from_env() -> OracleArtifactServiceConfig:
   return OracleArtifactServiceConfig(
-      user=_required_env("ORACLE_USER"),
-      password=_required_env("ORACLE_PASSWORD"),
-      dsn=_required_env("ORACLE_DSN"),
+      user=require_env("ORACLE_AI_DB_USER"),
+      password=require_env("ORACLE_AI_DB_PASSWORD"),
+      dsn=require_env("ORACLE_AI_DB_DSN"),
       table_prefix=os.environ.get(
           "ORACLE_ARTIFACT_TABLE_PREFIX", "ADK_ART_SMOKE"
       ),

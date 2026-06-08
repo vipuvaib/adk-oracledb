@@ -39,27 +39,27 @@ the itinerary later. Exported files are ignored by git through
 
 ## Required Environment
 
+The example loads a repo-root `.env` file if present. Use the canonical names
+from `.env.example`:
+
 ```bash
-export ORACLE_USER=ADK_USER
-export ORACLE_PASSWORD=...
-export ORACLE_DSN=localhost:1521/FREEPDB1
-export ORACLE_MEMORY_EMBEDDER_MODEL=embed-english-light-v3.0
-export COHERE_API_KEY=...
+ORACLE_AI_DB_USER=ADK_USER
+ORACLE_AI_DB_PASSWORD=...
+ORACLE_AI_DB_DSN=localhost:1521/FREEPDB1
+GENAI_MODEL=...
+GENAI_ENDPOINT=...
+GENAI_API_KEY=...
+EMBEDDING_MODEL=...
+EMBEDDING_ENDPOINT=...
+EMBEDDING_API_KEY=...
 ```
 
 Optional table prefixes:
 
 ```bash
-export ORACLE_TOOLS_AGENT_SESSION_TABLE_PREFIX=ADK_TOOLS_AGENT
-export ORACLE_TOOLS_AGENT_MEMORY_TABLE_PREFIX=ADK_TOOLS_AGENT_MEMORY
-export ORACLE_TOOLS_AGENT_ARTIFACT_TABLE_PREFIX=ADK_TOOLS_AGENT_ART
-```
-
-Optional explicit embedder settings:
-
-```bash
-export ORACLE_MEMORY_EMBEDDER_API_BASE=...
-export ORACLE_MEMORY_EMBEDDER_API_KEY=...
+export ORACLE_SESSION_TABLE_PREFIX=ADK_TOOLS_AGENT
+export ORACLE_MEMORY_TABLE_PREFIX=ADK_TOOLS_AGENT_MEMORY
+export ORACLE_ARTIFACT_TABLE_PREFIX=ADK_TOOLS_AGENT_ART
 ```
 
 ## Run The Noninteractive Smoke
@@ -94,9 +94,9 @@ registered before the service URIs are used:
 
 ```bash
 adk run examples/full_agent_oracle_tools \
-  --session_service_uri 'oracle://ADK_USER:...@localhost:1521/FREEPDB1?table_prefix=ADK_TOOLS_AGENT' \
-  --memory_service_uri 'oracle://ADK_USER:...@localhost:1521/FREEPDB1?memory_table_prefix=ADK_TOOLS_AGENT_MEMORY&embedder_model=embed-english-light-v3.0' \
-  --artifact_service_uri 'oracle://ADK_USER:...@localhost:1521/FREEPDB1?artifact_table_prefix=ADK_TOOLS_AGENT_ART'
+  --session_service_uri 'oracle://?table_prefix=ADK_TOOLS_AGENT' \
+  --memory_service_uri 'oracle://?memory_table_prefix=ADK_TOOLS_AGENT_MEMORY' \
+  --artifact_service_uri 'oracle://?artifact_table_prefix=ADK_TOOLS_AGENT_ART'
 ```
 
 If running `adk web examples`, ADK loads `services.py` from `examples/`.
@@ -105,14 +105,15 @@ In that layout, ensure `examples/services.py` also calls
 
 ```bash
 adk web examples \
-  --session_service_uri 'oracle://ADK_USER:...@localhost:1521/FREEPDB1?table_prefix=ADK_TOOLS_AGENT' \
-  --memory_service_uri 'oracle://ADK_USER:...@localhost:1521/FREEPDB1?memory_table_prefix=ADK_TOOLS_AGENT_MEMORY&embedder_model=embed-english-light-v3.0' \
-  --artifact_service_uri 'oracle://ADK_USER:...@localhost:1521/FREEPDB1?artifact_table_prefix=ADK_TOOLS_AGENT_ART'
+  --session_service_uri 'oracle://?table_prefix=ADK_TOOLS_AGENT' \
+  --memory_service_uri 'oracle://?memory_table_prefix=ADK_TOOLS_AGENT_MEMORY' \
+  --artifact_service_uri 'oracle://?artifact_table_prefix=ADK_TOOLS_AGENT_ART'
 ```
 
-Passwords with special characters must be URL-encoded. Interactive ADK runs may
-require normal model/provider credentials in addition to memory embedder
-credentials.
+Credentials can stay in `.env` or shell env. Passwords with special characters
+must be URL-encoded only if you include them directly in the URI. Interactive
+ADK runs use `GENAI_MODEL` for the agent LLM and `EMBEDDING_MODEL` for memory
+embeddings.
 
 ## Interactive Prompts
 

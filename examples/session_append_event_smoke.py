@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import sys
 import time
-from typing import NoReturn
 import uuid
 
 
@@ -13,6 +12,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
   sys.path.insert(0, str(SRC_DIR))
+EXAMPLES_DIR = REPO_ROOT / "examples"
+if str(EXAMPLES_DIR) not in sys.path:
+  sys.path.insert(0, str(EXAMPLES_DIR))
+
+from oracle_env import load_repo_env
+from oracle_env import require_env
 
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
@@ -22,27 +27,18 @@ from adk_oracledb.sessions.service import OracleSessionService
 from adk_oracledb.sessions.service import OracleSessionServiceConfig
 
 
+load_repo_env(__file__)
+
 APP_NAME = "smoke_app"
 USER_ID = "smoke_user"
 
 
-def _fail(message: str) -> NoReturn:
-  raise SystemExit(message)
-
-
-def _required_env(name: str) -> str:
-  value = os.environ.get(name)
-  if not value:
-    _fail(f"Missing required environment variable: {name}")
-  return value
-
-
 def _config_from_env() -> OracleSessionServiceConfig:
   return OracleSessionServiceConfig(
-      user=_required_env("ORACLE_USER"),
-      password=_required_env("ORACLE_PASSWORD"),
-      dsn=_required_env("ORACLE_DSN"),
-      table_prefix=os.environ.get("ORACLE_TABLE_PREFIX", "ADK_SMOKE"),
+      user=require_env("ORACLE_AI_DB_USER"),
+      password=require_env("ORACLE_AI_DB_PASSWORD"),
+      dsn=require_env("ORACLE_AI_DB_DSN"),
+      table_prefix=os.environ.get("ORACLE_SESSION_TABLE_PREFIX", "ADK_SMOKE"),
       auto_create_tables=True,
   )
 
@@ -85,15 +81,19 @@ async def main() -> None:
       session_id=session.id,
   )
   if loaded is None:
-    _fail("get_session returned None after append_event")
+    raise SystemExit("get_session returned None after append_event")
   if len(loaded.events) != 1:
-    _fail(f"expected 1 loaded event, got {len(loaded.events)}")
+    raise SystemExit(f"expected 1 loaded event, got {len(loaded.events)}")
   if loaded.state.get("destination") != "Goa":
-    _fail(f"expected destination='Goa', got {loaded.state.get('destination')!r}")
+    raise SystemExit(
+        f"expected destination='Goa', got {loaded.state.get('destination')!r}"
+    )
   if loaded.state.get("days") != 2:
-    _fail(f"expected days=2, got {loaded.state.get('days')!r}")
+    raise SystemExit(f"expected days=2, got {loaded.state.get('days')!r}")
   if not isinstance(loaded.events[0], Event):
-    _fail(f"expected loaded event to be Event, got {type(loaded.events[0])!r}")
+    raise SystemExit(
+        f"expected loaded event to be Event, got {type(loaded.events[0])!r}"
+    )
 
   print("verified loaded event count: 1")
   print(f"verified loaded state: {loaded.state}")

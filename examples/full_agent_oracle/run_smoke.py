@@ -6,7 +6,6 @@ from pathlib import Path
 import re
 import sys
 from typing import NoReturn
-from urllib.parse import quote
 from urllib.parse import urlencode
 import uuid
 
@@ -19,12 +18,22 @@ REPO_ROOT = EXAMPLES_DIR.parent
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
   sys.path.insert(0, str(SRC_DIR))
+if str(EXAMPLES_DIR) not in sys.path:
+  sys.path.insert(0, str(EXAMPLES_DIR))
+
+from oracle_env import configure_genai_provider_env
+from oracle_env import first_env
+from oracle_env import load_repo_env
+from oracle_env import require_env
 
 from google.adk.cli.service_registry import get_service_registry
 from google.adk.cli.service_registry import load_services_module
 from google.adk.cli.utils.agent_loader import AgentLoader
 from google.adk.memory.memory_entry import MemoryEntry
 
+
+load_repo_env(__file__)
+configure_genai_provider_env()
 
 APP_NAME = "full_agent_oracle_smoke_app"
 USER_ID = "full_agent_oracle_smoke_user"
@@ -34,61 +43,43 @@ def _fail(message: str) -> NoReturn:
   raise SystemExit(message)
 
 
-def _required_env(name: str) -> str:
-  value = os.environ.get(name)
-  if not value:
-    _fail(f"Missing required environment variable: {name}")
-  return value
-
-
-def _optional_env(name: str) -> str | None:
-  return os.environ.get(name) or None
-
-
 def _dsn_parts(dsn: str) -> tuple[str, int, str]:
   match = re.fullmatch(r"([^:/]+):(\d+)/(.+)", dsn)
   if not match:
     _fail(
-        "ORACLE_DSN must use host:port/service_name format for this smoke "
-        "script, for example localhost:1521/FREEPDB1"
+        "ORACLE_AI_DB_DSN must use host:port/service_name "
+        "format for this smoke script, for example localhost:1521/FREEPDB1"
     )
   return match.group(1), int(match.group(2)), match.group(3)
 
 
 def _oracle_uri(*, query: dict[str, str]) -> str:
-  user = quote(_required_env("ORACLE_USER"), safe="")
-  password = quote(_required_env("ORACLE_PASSWORD"), safe="")
-  host, port, service_name = _dsn_parts(_required_env("ORACLE_DSN"))
-  service_name = quote(service_name, safe="")
-  return (
-      f"oracle://{user}:{password}@{host}:{port}/{service_name}"
-      f"?{urlencode(query)}"
-  )
+  require_env("ORACLE_AI_DB_USER")
+  require_env("ORACLE_AI_DB_PASSWORD")
+  host, port, service_name = _dsn_parts(require_env("ORACLE_AI_DB_DSN"))
+  return f"oracle://{host}:{port}/{service_name}?{urlencode(query)}"
 
 
 def _session_uri() -> str:
   return _oracle_uri(
       query={
           "table_prefix": os.environ.get(
-              "ORACLE_FULL_AGENT_SESSION_TABLE_PREFIX", "ADK_FULL_AGENT"
+              "ORACLE_SESSION_TABLE_PREFIX", "ADK_FULL_AGENT"
           )
       }
   )
 
 
 def _memory_uri() -> str:
+  require_env("EMBEDDING_MODEL")
   query = {
       "memory_table_prefix": os.environ.get(
-          "ORACLE_FULL_AGENT_MEMORY_TABLE_PREFIX", "ADK_FULL_AGENT_MEMORY"
+          "ORACLE_MEMORY_TABLE_PREFIX", "ADK_FULL_AGENT_MEMORY"
       ),
-      "embedder_model": _required_env("ORACLE_MEMORY_EMBEDDER_MODEL"),
   }
-  embedder_api_base = _optional_env("ORACLE_MEMORY_EMBEDDER_API_BASE")
+  embedder_api_base = first_env("EMBEDDING_ENDPOINT")
   if embedder_api_base is not None:
     query["embedder_api_base"] = embedder_api_base
-  embedder_api_key = _optional_env("ORACLE_MEMORY_EMBEDDER_API_KEY")
-  if embedder_api_key is not None:
-    query["embedder_api_key"] = embedder_api_key
   return _oracle_uri(query=query)
 
 
@@ -96,7 +87,7 @@ def _artifact_uri() -> str:
   return _oracle_uri(
       query={
           "artifact_table_prefix": os.environ.get(
-              "ORACLE_FULL_AGENT_ARTIFACT_TABLE_PREFIX",
+              "ORACLE_ARTIFACT_TABLE_PREFIX",
               "ADK_FULL_AGENT_ART",
           )
       }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 from urllib.parse import parse_qs
 from urllib.parse import unquote
@@ -27,6 +28,23 @@ def _query_param(
     return default
   value = values[-1].strip()
   return value if value else default
+
+
+def _first_env(*names: str, default: str | None = None) -> str | None:
+  for name in names:
+    value = os.environ.get(name)
+    if value:
+      return value
+  return default
+
+
+def _query_param_or_env(
+    query: dict[str, list[str]],
+    name: str,
+    *env_names: str,
+    default: str | None = None,
+) -> str | None:
+  return _query_param(query, name) or _first_env(*env_names, default=default)
 
 
 def _parse_bool(
@@ -82,41 +100,55 @@ def _parse_oracle_uri(uri: str) -> dict[str, Any]:
   if parsed.scheme != _ORACLE_SCHEME:
     raise ValueError("oracle service URI must use oracle:// scheme")
 
-  username = parsed.username
-  if not username:
-    raise ValueError("oracle service URI requires username")
+  query = parse_qs(parsed.query, keep_blank_values=True)
 
-  password = parsed.password
-  if password is None or password == "":
-    raise ValueError("oracle service URI requires password")
+  username = (
+      unquote(parsed.username)
+      if parsed.username
+      else _first_env("ORACLE_AI_DB_USER")
+  )
+  if not username:
+    raise ValueError("oracle service URI requires username or ORACLE_AI_DB_USER")
+
+  password = (
+      unquote(parsed.password)
+      if parsed.password
+      else _first_env("ORACLE_AI_DB_PASSWORD")
+  )
+  if not password:
+    raise ValueError(
+        "oracle service URI requires password or ORACLE_AI_DB_PASSWORD"
+    )
 
   host = parsed.hostname
-  if not host:
-    raise ValueError("oracle service URI requires host")
-
-  try:
-    port = parsed.port or 1521
-  except ValueError as e:
-    raise ValueError("oracle service URI port must be an integer") from e
-
-  query = parse_qs(parsed.query, keep_blank_values=True)
   service_name = parsed.path.strip("/")
   if not service_name:
     service_name = _query_param(query, "service_name") or ""
-  if not service_name:
-    raise ValueError("oracle service URI requires service name")
 
-  user = unquote(username)
-  password = unquote(password)
-  service_name = unquote(service_name)
+  dsn = _first_env("ORACLE_AI_DB_DSN")
+  port: int | None = None
+  if host and service_name:
+    try:
+      port = parsed.port or 1521
+    except ValueError as e:
+      raise ValueError("oracle service URI port must be an integer") from e
+    service_name = unquote(service_name)
+    dsn = _build_dsn(host=host, port=port, service_name=service_name)
+  elif not host and not service_name and dsn:
+    service_name = ""
+  else:
+    raise ValueError(
+        "oracle service URI requires host/service_name or "
+        "ORACLE_AI_DB_DSN"
+    )
 
   return {
-      "user": user,
+      "user": username,
       "password": password,
       "host": host,
       "port": port,
       "service_name": service_name,
-      "dsn": _build_dsn(host=host, port=port, service_name=service_name),
+      "dsn": dsn,
       "query": query,
   }
 
@@ -136,11 +168,17 @@ def _pool_kwargs(parsed: dict[str, Any]) -> dict[str, int]:
 def _session_config_from_uri(uri: str) -> OracleSessionServiceConfig:
   parsed = _parse_oracle_uri(uri)
   query = parsed["query"]
+  table_prefix = _query_param_or_env(
+      query,
+      "table_prefix",
+      "ORACLE_SESSION_TABLE_PREFIX",
+      default="ADK",
+  )
   return OracleSessionServiceConfig(
       user=parsed["user"],
       password=parsed["password"],
       dsn=parsed["dsn"],
-      table_prefix=_query_param(query, "table_prefix", "ADK") or "ADK",
+      table_prefix=table_prefix or "ADK",
       auto_create_tables=_parse_bool(query, "auto_create_tables", True),
       **_pool_kwargs(parsed),
   )
@@ -152,6 +190,7 @@ def _artifact_config_from_uri(uri: str) -> OracleArtifactServiceConfig:
   table_prefix = (
       _query_param(query, "artifact_table_prefix")
       or _query_param(query, "table_prefix")
+      or _first_env("ORACLE_ARTIFACT_TABLE_PREFIX")
       or "ADK"
   )
   return OracleArtifactServiceConfig(
@@ -167,15 +206,21 @@ def _artifact_config_from_uri(uri: str) -> OracleArtifactServiceConfig:
 def _memory_config_from_uri(uri: str) -> OracleMemoryServiceConfig:
   parsed = _parse_oracle_uri(uri)
   query = parsed["query"]
-  embedder_model = _query_param(query, "embedder_model")
+  embedder_model = _query_param_or_env(
+      query,
+      "embedder_model",
+      "EMBEDDING_MODEL",
+  )
   if not embedder_model:
     raise ValueError(
-        "oracle:// memory service requires embedder_model query parameter"
+        "oracle:// memory service requires embedder_model query parameter "
+        "or EMBEDDING_MODEL"
     )
 
   table_name_prefix = (
       _query_param(query, "memory_table_prefix")
       or _query_param(query, "table_prefix")
+      or _first_env("ORACLE_MEMORY_TABLE_PREFIX")
       or "ADK_MEMORY"
   )
   search_top_k = _parse_int(query, "search_top_k")
@@ -190,11 +235,31 @@ def _memory_config_from_uri(uri: str) -> OracleMemoryServiceConfig:
       )
       or "create_if_necessary",
       "embedder_model": embedder_model,
-      "embedder_api_base": _query_param(query, "embedder_api_base"),
-      "embedder_api_key": _query_param(query, "embedder_api_key"),
-      "llm_model": _query_param(query, "llm_model"),
-      "llm_api_base": _query_param(query, "llm_api_base"),
-      "llm_api_key": _query_param(query, "llm_api_key"),
+      "embedder_api_base": _query_param_or_env(
+          query,
+          "embedder_api_base",
+          "EMBEDDING_ENDPOINT",
+      ),
+      "embedder_api_key": _query_param_or_env(
+          query,
+          "embedder_api_key",
+          "EMBEDDING_API_KEY",
+      ),
+      "llm_model": _query_param_or_env(
+          query,
+          "llm_model",
+          "GENAI_MODEL",
+      ),
+      "llm_api_base": _query_param_or_env(
+          query,
+          "llm_api_base",
+          "GENAI_ENDPOINT",
+      ),
+      "llm_api_key": _query_param_or_env(
+          query,
+          "llm_api_key",
+          "GENAI_API_KEY",
+      ),
       "extract_memories": _parse_bool(query, "extract_memories", False),
       "record_types": _parse_csv(query, "record_types"),
       **_pool_kwargs(parsed),

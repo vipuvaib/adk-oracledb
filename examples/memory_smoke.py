@@ -14,11 +14,20 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
   sys.path.insert(0, str(SRC_DIR))
+EXAMPLES_DIR = REPO_ROOT / "examples"
+if str(EXAMPLES_DIR) not in sys.path:
+  sys.path.insert(0, str(EXAMPLES_DIR))
+
+from oracle_env import first_env
+from oracle_env import load_repo_env
+from oracle_env import require_env
 
 from adk_oracledb.memory import OracleMemoryService
 from adk_oracledb.memory import OracleMemoryServiceConfig
 from google.adk.memory.memory_entry import MemoryEntry
 
+
+load_repo_env(__file__)
 
 APP_NAME = "memory_smoke_app"
 USER_ID = "memory_smoke_user"
@@ -29,33 +38,21 @@ def _fail(message: str) -> NoReturn:
   raise SystemExit(message)
 
 
-def _required_env(name: str) -> str:
-  value = os.environ.get(name)
-  if not value:
-    _fail(f"Missing required environment variable: {name}")
-  return value
-
-
-def _optional_env(name: str) -> str | None:
-  value = os.environ.get(name)
-  return value or None
-
-
 def _config_from_env() -> OracleMemoryServiceConfig:
   return OracleMemoryServiceConfig(
-      user=_required_env("ORACLE_USER"),
-      password=_required_env("ORACLE_PASSWORD"),
-      dsn=_required_env("ORACLE_DSN"),
+      user=require_env("ORACLE_AI_DB_USER"),
+      password=require_env("ORACLE_AI_DB_PASSWORD"),
+      dsn=require_env("ORACLE_AI_DB_DSN"),
       table_name_prefix=os.environ.get(
           "ORACLE_MEMORY_TABLE_PREFIX", "ADK_MEMORY_SMOKE"
       ),
       schema_policy="create_if_necessary",
-      embedder_model=_required_env("ORACLE_MEMORY_EMBEDDER_MODEL"),
-      embedder_api_base=_optional_env("ORACLE_MEMORY_EMBEDDER_API_BASE"),
-      embedder_api_key=_optional_env("ORACLE_MEMORY_EMBEDDER_API_KEY"),
-      llm_model=_optional_env("ORACLE_MEMORY_LLM_MODEL"),
-      llm_api_base=_optional_env("ORACLE_MEMORY_LLM_API_BASE"),
-      llm_api_key=_optional_env("ORACLE_MEMORY_LLM_API_KEY"),
+      embedder_model=require_env("EMBEDDING_MODEL"),
+      embedder_api_base=first_env("EMBEDDING_ENDPOINT"),
+      embedder_api_key=first_env("EMBEDDING_API_KEY"),
+      llm_model=first_env("GENAI_MODEL"),
+      llm_api_base=first_env("GENAI_ENDPOINT"),
+      llm_api_key=first_env("GENAI_API_KEY"),
       extract_memories=False,
   )
 
