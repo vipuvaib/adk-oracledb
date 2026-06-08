@@ -5,3 +5,7 @@ __pycache__/
 .idea/
 
 .venv*/
+.env
+.env.*
+!.env.example
+.local_env
