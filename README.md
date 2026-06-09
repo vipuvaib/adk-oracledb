@@ -14,6 +14,9 @@ The examples use these shared names:
 - `ORACLE_AI_DB_USER`, `ORACLE_AI_DB_PASSWORD`, `ORACLE_AI_DB_DSN` for Oracle.
 - `GENAI_MODEL`, `GENAI_ENDPOINT`, `GENAI_API_KEY` for the agent LLM.
 - `EMBEDDING_MODEL`, `EMBEDDING_ENDPOINT`, `EMBEDDING_API_KEY` for memory embeddings.
+- `EMBEDDING_ENCODING_FORMAT`, `EMBEDDING_INPUT_TYPE`,
+  `EMBEDDING_QUERY_INPUT_TYPE`, and `EMBEDDING_DOCUMENT_INPUT_TYPE` for optional
+  embedding request parameters.
 - `ORACLE_SESSION_TABLE_PREFIX`, `ORACLE_MEMORY_TABLE_PREFIX`, and
   `ORACLE_ARTIFACT_TABLE_PREFIX` for optional table prefix defaults.
 
@@ -117,10 +120,19 @@ Optional provider settings:
 ```bash
 export EMBEDDING_ENDPOINT=...
 export EMBEDDING_API_KEY=...
+export EMBEDDING_ENCODING_FORMAT=float
+export EMBEDDING_INPUT_TYPE=query
 export GENAI_MODEL=...
 export GENAI_ENDPOINT=...
 export GENAI_API_KEY=...
 ```
+
+Some OpenAI-compatible NIM embedding endpoints require
+`EMBEDDING_ENCODING_FORMAT=float` and `EMBEDDING_INPUT_TYPE=query`. Leave these
+unset for providers that do not need them. If a provider requires different
+values for search-query embeddings and stored-memory embeddings, use
+`EMBEDDING_QUERY_INPUT_TYPE` and `EMBEDDING_DOCUMENT_INPUT_TYPE` instead of the
+single `EMBEDDING_INPUT_TYPE`.
 
 MCP tools are not implemented yet.
 

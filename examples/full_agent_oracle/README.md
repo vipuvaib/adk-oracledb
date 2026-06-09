@@ -26,7 +26,17 @@ GENAI_API_KEY=...
 EMBEDDING_MODEL=...
 EMBEDDING_ENDPOINT=...
 EMBEDDING_API_KEY=...
+EMBEDDING_ENCODING_FORMAT=
+EMBEDDING_INPUT_TYPE=
+EMBEDDING_QUERY_INPUT_TYPE=
+EMBEDDING_DOCUMENT_INPUT_TYPE=
 ```
+
+Some OpenAI-compatible NIM embedding endpoints require
+`EMBEDDING_ENCODING_FORMAT=float` and `EMBEDDING_INPUT_TYPE=query`. Leave them
+blank for providers that do not need these request parameters. If query and
+stored-memory embeddings need different values, use
+`EMBEDDING_QUERY_INPUT_TYPE` and `EMBEDDING_DOCUMENT_INPUT_TYPE`.
 
 Optional table prefixes:
 

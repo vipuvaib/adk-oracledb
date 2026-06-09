@@ -94,6 +94,18 @@ def _memory_uri() -> str:
   embedder_api_base = first_env("EMBEDDING_ENDPOINT")
   if embedder_api_base is not None:
     query["embedder_api_base"] = embedder_api_base
+  embedder_encoding_format = first_env("EMBEDDING_ENCODING_FORMAT")
+  if embedder_encoding_format is not None:
+    query["embedder_encoding_format"] = embedder_encoding_format
+  embedder_input_type = first_env("EMBEDDING_INPUT_TYPE")
+  if embedder_input_type is not None:
+    query["embedder_input_type"] = embedder_input_type
+  embedder_query_input_type = first_env("EMBEDDING_QUERY_INPUT_TYPE")
+  if embedder_query_input_type is not None:
+    query["embedder_query_input_type"] = embedder_query_input_type
+  embedder_document_input_type = first_env("EMBEDDING_DOCUMENT_INPUT_TYPE")
+  if embedder_document_input_type is not None:
+    query["embedder_document_input_type"] = embedder_document_input_type
   return _oracle_uri(query=query)
 
 

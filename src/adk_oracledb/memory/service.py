@@ -231,6 +231,25 @@ def _search_result_to_memory_entry(result: Any) -> MemoryEntry:
   )
 
 
+class _InputTypeAwareEmbedder:
+  """Routes query and document embeddings to embedders with different kwargs."""
+
+  def __init__(self, *, query_embedder: Any, document_embedder: Any):
+    self._query_embedder = query_embedder
+    self._document_embedder = document_embedder
+
+  def __getattr__(self, name: str) -> Any:
+    return getattr(self._document_embedder, name)
+
+  def embed(self, texts: list[str], *, is_query: bool = False) -> Any:
+    embedder = self._query_embedder if is_query else self._document_embedder
+    return embedder.embed(texts, is_query=is_query)
+
+  def embed_async(self, texts: list[str], *, is_query: bool = False) -> Any:
+    embedder = self._query_embedder if is_query else self._document_embedder
+    return embedder.embed_async(texts, is_query=is_query)
+
+
 class OracleMemoryServiceConfig(BaseModel):
   """Configuration for Oracle-backed ADK memory integration."""
 
@@ -244,6 +263,10 @@ class OracleMemoryServiceConfig(BaseModel):
   embedder_model: str | None = None
   embedder_api_base: str | None = None
   embedder_api_key: str | None = None
+  embedder_encoding_format: str | None = None
+  embedder_input_type: str | None = None
+  embedder_query_input_type: str | None = None
+  embedder_document_input_type: str | None = None
   llm_model: str | None = None
   llm_api_base: str | None = None
   llm_api_key: str | None = None
@@ -263,6 +286,37 @@ class OracleMemoryServiceConfig(BaseModel):
           "underscore"
       )
     return table_name_prefix
+
+  @field_validator("embedder_encoding_format", mode="before")
+  @classmethod
+  def _validate_embedder_encoding_format(cls, value: object) -> str | None:
+    if value is None:
+      return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+      return None
+    if normalized not in {"float", "base64"}:
+      raise ValueError("embedder_encoding_format must be 'float' or 'base64'")
+    return normalized
+
+  @field_validator(
+      "embedder_input_type",
+      "embedder_query_input_type",
+      "embedder_document_input_type",
+      mode="before",
+  )
+  @classmethod
+  def _validate_embedder_input_type(cls, value: object) -> str | None:
+    if value is None:
+      return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+      return None
+    if normalized not in {"query", "passage", "document"}:
+      raise ValueError(
+          "embedder_input_type must be 'query', 'passage', or 'document'"
+      )
+    return normalized
 
   @model_validator(mode="after")
   def _validate_pool_bounds(self) -> OracleMemoryServiceConfig:
@@ -291,7 +345,9 @@ class OracleMemoryService(BaseMemoryService):
         increment=1,
     )
 
-  def _build_embedder(self, embedder_cls: Any) -> Any:
+  def _embedder_kwargs(
+      self, *, input_type: str | None | object = ...
+  ) -> dict[str, Any]:
     if not self._config.embedder_model or not self._config.embedder_model.strip():
       raise ValueError(
           "OracleMemoryServiceConfig.embedder_model is required for "
@@ -303,7 +359,37 @@ class OracleMemoryService(BaseMemoryService):
       kwargs["api_base"] = self._config.embedder_api_base
     if self._config.embedder_api_key is not None:
       kwargs["api_key"] = self._config.embedder_api_key
-    return embedder_cls(**kwargs)
+    if self._config.embedder_encoding_format is not None:
+      kwargs["encoding_format"] = self._config.embedder_encoding_format
+    if input_type is ...:
+      input_type = self._config.embedder_input_type
+    if input_type is not None:
+      kwargs["input_type"] = input_type
+    return kwargs
+
+  def _build_embedder(self, embedder_cls: Any) -> Any:
+    query_input_type = (
+        self._config.embedder_query_input_type
+        or self._config.embedder_input_type
+    )
+    document_input_type = (
+        self._config.embedder_document_input_type
+        or self._config.embedder_input_type
+    )
+
+    if query_input_type == document_input_type:
+      return embedder_cls(**self._embedder_kwargs(input_type=query_input_type))
+
+    query_embedder = embedder_cls(
+        **self._embedder_kwargs(input_type=query_input_type)
+    )
+    document_embedder = embedder_cls(
+        **self._embedder_kwargs(input_type=document_input_type)
+    )
+    return _InputTypeAwareEmbedder(
+        query_embedder=query_embedder,
+        document_embedder=document_embedder,
+    )
 
   def _build_llm(self, llm_cls: Any) -> Any | None:
     if not self._config.llm_model or not self._config.llm_model.strip():

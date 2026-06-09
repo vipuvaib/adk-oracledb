@@ -245,6 +245,26 @@ def _memory_config_from_uri(uri: str) -> OracleMemoryServiceConfig:
           "embedder_api_key",
           "EMBEDDING_API_KEY",
       ),
+      "embedder_encoding_format": _query_param_or_env(
+          query,
+          "embedder_encoding_format",
+          "EMBEDDING_ENCODING_FORMAT",
+      ),
+      "embedder_input_type": _query_param_or_env(
+          query,
+          "embedder_input_type",
+          "EMBEDDING_INPUT_TYPE",
+      ),
+      "embedder_query_input_type": _query_param_or_env(
+          query,
+          "embedder_query_input_type",
+          "EMBEDDING_QUERY_INPUT_TYPE",
+      ),
+      "embedder_document_input_type": _query_param_or_env(
+          query,
+          "embedder_document_input_type",
+          "EMBEDDING_DOCUMENT_INPUT_TYPE",
+      ),
       "llm_model": _query_param_or_env(
           query,
           "llm_model",
