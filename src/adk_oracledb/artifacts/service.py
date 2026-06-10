@@ -525,6 +525,7 @@ class OracleArtifactService(BaseArtifactService):
           "scope_type": scope_type,
           "scope_id": scope_id,
           "filename_hash": filename_hash,
+          "filename": filename,
       }
       if version is None:
         query = f"""
@@ -537,6 +538,7 @@ class OracleArtifactService(BaseArtifactService):
               AND scope_type = :scope_type
               AND scope_id = :scope_id
               AND filename_hash = :filename_hash
+              AND filename = :filename
             ORDER BY version DESC
           )
           WHERE ROWNUM <= 1
@@ -551,6 +553,7 @@ class OracleArtifactService(BaseArtifactService):
             AND scope_type = :scope_type
             AND scope_id = :scope_id
             AND filename_hash = :filename_hash
+            AND filename = :filename
             AND version = :version
         """
 
