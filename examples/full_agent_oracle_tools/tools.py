@@ -289,7 +289,12 @@ async def save_text_artifact(
     text: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Saves arbitrary text as an Oracle-backed ADK artifact."""
+  """Saves arbitrary text as an Oracle-backed ADK artifact.
+
+  To use ADK user-scoped artifacts, pass a filename beginning with the literal
+  prefix "user:". Do not replace the colon with "_". Plain filenames are
+  session-scoped. "user:foo.txt" is user-scoped.
+  """
   filename = _normalize_text_filename(filename)
   text = _require_text_preserve(text, "text")
   version = await tool_context.save_artifact(
@@ -314,7 +319,12 @@ async def save_itinerary_artifact(
     itinerary: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Saves a text itinerary as an Oracle-backed ADK artifact."""
+  """Saves a text itinerary as an Oracle-backed ADK artifact.
+
+  To use ADK user-scoped artifacts, pass a filename beginning with the literal
+  prefix "user:". Do not replace the colon with "_". Plain filenames are
+  session-scoped. "user:foo.txt" is user-scoped.
+  """
   result = await save_text_artifact(
       filename=filename,
       text=itinerary,
@@ -361,7 +371,12 @@ async def load_artifact(
     filename: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Loads any saved text or inline_data artifact."""
+  """Loads any saved text or inline_data artifact.
+
+  To use ADK user-scoped artifacts, pass a filename beginning with the literal
+  prefix "user:". Do not replace the colon with "_". Plain filenames are
+  session-scoped. "user:foo.txt" is user-scoped.
+  """
   filename = _require_text(filename, "filename")
   artifact = await tool_context.load_artifact(filename)
   if artifact is None:
@@ -409,7 +424,12 @@ async def load_itinerary_artifact(
     filename: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Loads a saved text itinerary artifact."""
+  """Loads a saved text itinerary artifact.
+
+  To use ADK user-scoped artifacts, pass a filename beginning with the literal
+  prefix "user:". Do not replace the colon with "_". Plain filenames are
+  session-scoped. "user:foo.txt" is user-scoped.
+  """
   filename = _normalize_text_filename(filename)
   result = await load_artifact(filename=filename, tool_context=tool_context)
   if result.get("status") == "not_found":
@@ -441,7 +461,12 @@ async def generate_and_save_itinerary_pdf(
     itinerary: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Generates a simple PDF from itinerary text and saves it as an artifact."""
+  """Generates a simple PDF from itinerary text and saves it as an artifact.
+
+  To use ADK user-scoped artifacts, pass a filename beginning with the literal
+  prefix "user:". Do not replace the colon with "_". Plain filenames are
+  session-scoped. "user:foo.txt" is user-scoped.
+  """
   filename = _ensure_pdf_filename(filename)
   companion_filename = _companion_text_filename_for_pdf(filename)
   itinerary = _require_text_preserve(itinerary, "itinerary")
@@ -486,7 +511,12 @@ async def export_artifact_to_file(
     output_filename: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Exports a saved artifact to the local example exports directory."""
+  """Exports a saved artifact to the local example exports directory.
+
+  To use ADK user-scoped artifacts, pass a filename beginning with the literal
+  prefix "user:". Do not replace the colon with "_". Plain filenames are
+  session-scoped. "user:foo.txt" is user-scoped.
+  """
   filename = _require_text(filename, "filename")
   output_path = _safe_export_path(output_filename)
   artifact = await tool_context.load_artifact(filename)
