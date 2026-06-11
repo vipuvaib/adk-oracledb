@@ -29,9 +29,9 @@ examples prefer env-backed secret-free URIs.
 Core service smokes:
 
 ```bash
-.venv/bin/python examples/session_smoke.py
-.venv/bin/python examples/artifact_smoke.py
-.venv/bin/python examples/memory_smoke.py
+.venv/bin/python tests/smoke/session_smoke.py
+.venv/bin/python tests/smoke/artifact_smoke.py
+.venv/bin/python tests/smoke/memory_smoke.py
 ```
 
 Example/e2e smokes:
@@ -42,7 +42,7 @@ Example/e2e smokes:
 ```
 
 The memory and full-agent smokes require the memory extra plus embedding
-provider configuration. `examples/artifact_smoke.py` directly tests
+provider configuration. `tests/smoke/artifact_smoke.py` directly tests
 OracleArtifactService `inline_data`/binary support. The tool-agent example
 intentionally demonstrates text and generated-PDF artifact flows only.
 
@@ -69,10 +69,10 @@ export ORACLE_SESSION_TABLE_PREFIX=ADK_SMOKE
 Run the manual smoke tests from the repository root:
 
 ```bash
-.venv/bin/python examples/session_smoke.py
+.venv/bin/python tests/smoke/session_smoke.py
 ```
 
-`examples/session_smoke.py` verifies automatic table creation, ServiceRegistry
+`tests/smoke/session_smoke.py` verifies automatic table creation, ServiceRegistry
 construction, `create_session`, `get_session`, `list_sessions`,
 `delete_session`, `append_event`, event reload as an ADK `Event`, and
 persistence of event `actions.state_delta` into session state.
@@ -131,7 +131,7 @@ export ORACLE_AI_DB_DSN=localhost:1521/FREEPDB1
 export ORACLE_MEMORY_TABLE_PREFIX=ADK_MEMORY_SMOKE
 export EMBEDDING_MODEL=...
 
-.venv/bin/python examples/memory_smoke.py
+.venv/bin/python tests/smoke/memory_smoke.py
 ```
 
 Optional provider settings:
@@ -174,7 +174,7 @@ export ORACLE_ARTIFACT_TABLE_PREFIX=ADK_ART_SMOKE
 Run the artifact smoke test from the repository root:
 
 ```bash
-.venv/bin/python examples/artifact_smoke.py
+.venv/bin/python tests/smoke/artifact_smoke.py
 ```
 The reusable OracleArtifactService smoke test has passed locally against Oracle Database Free.
 
