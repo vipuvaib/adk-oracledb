@@ -32,12 +32,12 @@ from google.adk.cli.utils.agent_loader import AgentLoader
 
 from tools import export_artifact_to_file
 from tools import generate_and_save_itinerary_pdf
+from tools import list_saved_artifacts
 from tools import load_artifact
 from tools import load_itinerary_artifact
 from tools import plan_trip
 from tools import recall_travel_preferences
 from tools import remember_travel_preference
-from tools import save_base64_artifact
 from tools import save_itinerary_artifact
 from tools import save_text_artifact
 
@@ -47,9 +47,6 @@ configure_genai_provider_env()
 
 APP_NAME = "oracle_tools_agent_smoke_app"
 USER_ID = "oracle_tools_agent_smoke_user"
-TINY_PNG_BYTES = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
-)
 
 
 def _fail(message: str) -> NoReturn:
@@ -216,6 +213,13 @@ class SmokeToolContext:
         version=version,
     )
 
+  async def list_artifacts(self) -> list[str]:
+    return await self.artifact_service.list_artifact_keys(
+        app_name=self.app_name,
+        user_id=self.user_id,
+        session_id=self.session_id,
+    )
+
 
 def _load_agent_and_services() -> None:
   load_services_module(str(EXAMPLE_DIR))
@@ -335,7 +339,10 @@ async def _planning_smoke(
 
 
 async def _text_artifact_smoke(
-    tool_context: SmokeToolContext, smoke_id: str, itinerary: str
+    tool_context: SmokeToolContext,
+    smoke_id: str,
+    artifact_base: str,
+    itinerary: str,
 ) -> None:
   filename = f"user:oracle-tools-text-itinerary-{smoke_id}"
   save_result = await save_text_artifact(
@@ -348,6 +355,8 @@ async def _text_artifact_smoke(
   saved_filename = str(save_result["filename"])
   if not saved_filename.endswith(".txt"):
     _fail(f"save_text_artifact did not normalize filename: {save_result}")
+  if save_result.get("scope") != "user":
+    _fail(f"save_text_artifact did not report user scope: {save_result}")
 
   load_result = await load_artifact(
       filename=saved_filename,
@@ -383,38 +392,67 @@ async def _text_artifact_smoke(
             expected_text=itinerary,
         )
     )
+  if load_result.get("filename") != saved_filename:
+    _fail(f"load_artifact did not report the saved filename: {load_result}")
+  if load_result.get("scope") != "user":
+    _fail(f"load_artifact did not report user scope: {load_result}")
 
   itinerary_result = await save_itinerary_artifact(
-      filename=f"oracle-tools-compat-itinerary-{smoke_id}",
+      filename=artifact_base,
       itinerary=itinerary,
       tool_context=tool_context,
   )
+  expected_text_filename = f"{artifact_base}.txt"
+  if itinerary_result.get("filename") != expected_text_filename:
+    _fail(
+        "user: prefix was not preserved by save_itinerary_artifact: "
+        f"{itinerary_result}"
+    )
+  if itinerary_result.get("scope") != "user":
+    _fail(f"save_itinerary_artifact did not report user scope: {itinerary_result}")
   loaded_itinerary = await load_itinerary_artifact(
-      filename=str(itinerary_result["filename"]),
+      filename=artifact_base,
       tool_context=tool_context,
   )
+  if loaded_itinerary.get("filename") != expected_text_filename:
+    _fail(
+        "load_itinerary_artifact did not normalize with user: intact: "
+        f"{loaded_itinerary}"
+    )
+  if loaded_itinerary.get("scope") != "user":
+    _fail(f"load_itinerary_artifact did not report user scope: {loaded_itinerary}")
   if loaded_itinerary["text"] != itinerary:
     _fail("load_itinerary_artifact compatibility path failed")
   print("oracle tools text artifact smoke passed")
 
 
 async def _pdf_artifact_smoke(
-    tool_context: SmokeToolContext, smoke_id: str, itinerary: str
+    tool_context: SmokeToolContext,
+    artifact_base: str,
+    itinerary: str,
 ) -> str:
-  filename = f"user:oracle-tools-itinerary-{smoke_id}.pdf"
   save_result = await generate_and_save_itinerary_pdf(
-      filename=filename,
+      filename=artifact_base,
       title="Nepal Itinerary",
       itinerary=itinerary,
       tool_context=tool_context,
   )
   if save_result["status"] != "saved":
     _fail(f"generate_and_save_itinerary_pdf failed: {save_result}")
+  expected_pdf_filename = f"{artifact_base}.pdf"
+  expected_companion_filename = f"{artifact_base}.txt"
+  if save_result.get("pdf_filename") != expected_pdf_filename:
+    _fail(f"PDF filename did not preserve user: prefix: {save_result}")
+  if save_result.get("companion_text_filename") != expected_companion_filename:
+    _fail(f"PDF companion filename did not preserve user: prefix: {save_result}")
+  if save_result.get("scope") != "user":
+    _fail(f"PDF save did not report user scope: {save_result}")
   companion_filename = str(save_result["companion_text_filename"])
   if not companion_filename.endswith(".txt"):
     _fail(f"PDF companion text filename was not returned: {save_result}")
+  pdf_filename = str(save_result["pdf_filename"])
   load_result = await load_artifact(
-      filename=filename,
+      filename=pdf_filename,
       tool_context=tool_context,
   )
   if load_result["status"] != "loaded":
@@ -423,6 +461,8 @@ async def _pdf_artifact_smoke(
     _fail(f"PDF artifact loaded with wrong kind: {load_result}")
   if load_result["mime_type"] != "application/pdf":
     _fail(f"PDF artifact loaded with wrong MIME type: {load_result}")
+  if load_result.get("scope") != "user":
+    _fail(f"PDF load did not report user scope: {load_result}")
   pdf_bytes = base64.b64decode(str(load_result["base64_data"]))
   if not pdf_bytes.startswith(b"%PDF"):
     _fail("PDF artifact bytes did not start with %PDF")
@@ -431,7 +471,22 @@ async def _pdf_artifact_smoke(
   if load_result.get("companion_text") != itinerary:
     _fail("PDF load did not include the companion text")
   print("oracle tools pdf artifact smoke passed")
-  return filename
+  return pdf_filename
+
+
+async def _list_artifacts_smoke(
+    tool_context: SmokeToolContext, artifact_base: str
+) -> None:
+  result = await list_saved_artifacts(tool_context=tool_context)
+  if result["status"] != "listed":
+    _fail(f"list_saved_artifacts failed: {result}")
+  artifact_names = result.get("artifact_names")
+  if not isinstance(artifact_names, list):
+    _fail(f"list_saved_artifacts did not return a list: {result}")
+  for expected in (f"{artifact_base}.txt", f"{artifact_base}.pdf"):
+    if expected not in artifact_names:
+      _fail(f"list_saved_artifacts did not include {expected}: {result}")
+  print("oracle tools artifact list smoke passed")
 
 
 async def _pdf_export_smoke(
@@ -444,6 +499,10 @@ async def _pdf_export_smoke(
   )
   if export_result["status"] != "exported":
     _fail(f"export_artifact_to_file failed for PDF: {export_result}")
+  if export_result.get("source_filename") != filename:
+    _fail(f"export_artifact_to_file did not report source filename: {export_result}")
+  if export_result.get("scope") != "user":
+    _fail(f"export_artifact_to_file did not report user scope: {export_result}")
   output_path = Path(str(export_result["output_path"]))
   if not output_path.exists():
     _fail(f"PDF export path does not exist: {output_path}")
@@ -452,87 +511,18 @@ async def _pdf_export_smoke(
   print("oracle tools pdf export smoke passed")
 
 
-async def _image_artifact_smoke(
-    tool_context: SmokeToolContext, smoke_id: str
-) -> None:
-  filename = f"user:oracle-tools-pixel-{smoke_id}.png"
-  save_result = await save_base64_artifact(
-      filename=filename,
-      base64_data=base64.b64encode(TINY_PNG_BYTES).decode("ascii"),
-      mime_type="image/png",
-      tool_context=tool_context,
-  )
-  if save_result["status"] != "saved":
-    _fail(f"save_base64_artifact failed for PNG: {save_result}")
-  load_result = await load_artifact(
-      filename=filename,
-      tool_context=tool_context,
-  )
-  if load_result["mime_type"] != "image/png":
-    _fail(f"PNG artifact loaded with wrong MIME type: {load_result}")
-  png_bytes = base64.b64decode(str(load_result["base64_data"]))
-  if png_bytes != TINY_PNG_BYTES:
-    _fail("PNG artifact bytes did not round-trip")
-  export_result = await export_artifact_to_file(
-      filename=filename,
-      output_filename=f"oracle-tools-pixel-{smoke_id}.png",
-      tool_context=tool_context,
-  )
-  if export_result["status"] != "exported":
-    _fail(f"export_artifact_to_file failed for PNG: {export_result}")
-  exported_png = Path(str(export_result["output_path"])).read_bytes()
-  if exported_png != TINY_PNG_BYTES:
-    _fail("exported PNG bytes did not match expected bytes")
-  print("oracle tools image artifact smoke passed")
-
-
-async def _binary_artifact_smoke(
-    tool_context: SmokeToolContext, smoke_id: str
-) -> None:
-  filename = f"user:oracle-tools-binary-{smoke_id}.bin"
-  payload = f"oracle-tools-binary-smoke:{smoke_id}".encode("utf-8")
-  save_result = await save_base64_artifact(
-      filename=filename,
-      base64_data=base64.b64encode(payload).decode("ascii"),
-      mime_type="application/octet-stream",
-      tool_context=tool_context,
-  )
-  if save_result["status"] != "saved":
-    _fail(f"save_base64_artifact failed for binary: {save_result}")
-  load_result = await load_artifact(
-      filename=filename,
-      tool_context=tool_context,
-  )
-  if load_result["mime_type"] != "application/octet-stream":
-    _fail(f"binary artifact loaded with wrong MIME type: {load_result}")
-  loaded_payload = base64.b64decode(str(load_result["base64_data"]))
-  if loaded_payload != payload:
-    _fail("binary artifact bytes did not round-trip")
-  export_result = await export_artifact_to_file(
-      filename=filename,
-      output_filename=f"oracle-tools-binary-{smoke_id}.bin",
-      tool_context=tool_context,
-  )
-  if export_result["status"] != "exported":
-    _fail(f"export_artifact_to_file failed for binary: {export_result}")
-  exported_payload = Path(str(export_result["output_path"])).read_bytes()
-  if exported_payload != payload:
-    _fail("exported binary bytes did not match expected bytes")
-  print("oracle tools binary artifact smoke passed")
-
-
 async def main() -> None:
   _load_agent_and_services()
   smoke_id = f"adk-oracledb-tools-agent-smoke-{uuid.uuid4().hex}"
+  artifact_base = f"user:demo-trip-{smoke_id}"
   session_service, tool_context = await _make_context(smoke_id)
   try:
     await _memory_tool_smoke(tool_context, smoke_id)
     itinerary = await _planning_smoke(tool_context, smoke_id)
-    await _text_artifact_smoke(tool_context, smoke_id, itinerary)
-    pdf_filename = await _pdf_artifact_smoke(tool_context, smoke_id, itinerary)
+    await _text_artifact_smoke(tool_context, smoke_id, artifact_base, itinerary)
+    pdf_filename = await _pdf_artifact_smoke(tool_context, artifact_base, itinerary)
+    await _list_artifacts_smoke(tool_context, artifact_base)
     await _pdf_export_smoke(tool_context, smoke_id, pdf_filename)
-    await _image_artifact_smoke(tool_context, smoke_id)
-    await _binary_artifact_smoke(tool_context, smoke_id)
   finally:
     await session_service.delete_session(
         app_name=APP_NAME,

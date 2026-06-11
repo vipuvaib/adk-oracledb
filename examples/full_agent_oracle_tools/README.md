@@ -12,8 +12,8 @@ artifacts:
 - `save_text_artifact` and `save_itinerary_artifact` save text artifacts.
 - `generate_and_save_itinerary_pdf` stores a generated PDF artifact and a
   companion text artifact.
-- `save_base64_artifact` stores PDF, image, or generic file bytes.
-- `load_artifact` loads text and binary artifacts.
+- `load_artifact` loads text artifacts and generated PDF metadata/companion
+  text.
 - `export_artifact_to_file` writes stored artifacts to local files under
   `examples/full_agent_oracle_tools/exports/`.
 
@@ -24,13 +24,7 @@ is separate from long-term memory; session state/events remain in
 `OracleSessionService`.
 
 Normal artifact filenames are session scoped. Filenames beginning with `user:`
-are user scoped and can be loaded across sessions for the same app/user. PDF,
-image, and binary artifact support uses `inline_data` bytes stored by
-`OracleArtifactService`.
-
-The interactive agent can save PDFs/images only through tools that generate
-bytes or receive base64 data. File upload support from ADK web UI is separate
-future work and may require inspecting ADK file-upload pathways.
+are user scoped and can be loaded across sessions for the same app/user.
 
 Generated PDFs are binary artifacts. The source itinerary text is saved
 separately as a companion `.txt` artifact so the agent can retrieve and discuss
@@ -93,9 +87,19 @@ The smoke covers:
 - preference-aware trip planning
 - text artifact round-trip
 - generated PDF artifact round-trip plus companion text
+- artifact listing
 - local PDF export
-- PNG image artifact round-trip plus local export
-- generic binary artifact round-trip plus local export
+
+## Artifact Behavior
+
+- Plain artifact names are session-scoped.
+- Names beginning with the literal `user:` prefix are user-scoped and can be
+  loaded across sessions for the same app/user. Do not replace `user:` with
+  `user_`.
+- `export_artifact_to_file` writes stored artifact bytes to the local
+  `exports/` directory.
+- This example intentionally demonstrates text artifacts, generated PDF
+  artifacts, listing, loading, and local export.
 
 ## Run With ADK
 

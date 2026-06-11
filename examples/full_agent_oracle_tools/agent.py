@@ -14,12 +14,12 @@ from oracle_env import load_repo_env
 
 from .tools import export_artifact_to_file
 from .tools import generate_and_save_itinerary_pdf
+from .tools import list_saved_artifacts
 from .tools import load_artifact
 from .tools import load_itinerary_artifact
 from .tools import plan_trip
 from .tools import recall_travel_preferences
 from .tools import remember_travel_preference
-from .tools import save_base64_artifact
 from .tools import save_itinerary_artifact
 from .tools import save_text_artifact
 
@@ -50,26 +50,26 @@ root_agent = LlmAgent(
         "- When the user asks to save an itinerary as PDF, call "
         "generate_and_save_itinerary_pdf. It also saves companion text so the "
         "itinerary can be retrieved later.\n"
-        "- When the user provides base64 file data for a PDF, image, or binary "
-        "file, call save_base64_artifact. Do not ask for raw local file paths.\n"
-        "- Use load_artifact to inspect stored text, PDF companion text, or "
-        "binary metadata. Use export_artifact_to_file when the user asks to "
-        "download, open, or get a saved PDF/image/binary artifact as a local "
-        "file.\n"
+        "- When the user asks what files or artifacts exist, call "
+        "list_saved_artifacts.\n"
+        "- Use load_artifact or load_itinerary_artifact for saved text "
+        "artifacts, generated PDF metadata, and generated PDF companion text.\n"
+        "- Use export_artifact_to_file when the user asks to download, open, "
+        "or get a saved generated PDF or text artifact as a local file.\n"
         "- In ADK artifacts, the prefix user: is a namespace prefix, not a "
         "normal filename character. Never replace user: with user_. Never "
         "sanitize or remove the colon in user:.\n"
-        "- If the user asks to save, load, or export an artifact whose name "
-        "starts with user:, pass that exact prefix to the tool. Example: user "
-        "request: save as user:ujjwal_trip; tool filename argument: "
-        "user:ujjwal_trip; final saved artifact after .txt normalization: "
+        "- If the user asks to save, load, list, or export an artifact whose "
+        "name starts with user:, pass that exact prefix to the tool. Example: "
+        "user says: save this as user:ujjwal_trip; tool filename argument "
+        "must be: user:ujjwal_trip; final saved filename may become: "
         "user:ujjwal_trip.txt.\n"
         "- If a user-scoped itinerary filename has no extension, the tool may "
         "append .txt while preserving the prefix: user:ujjwal_trip -> "
         "user:ujjwal_trip.txt. Always tell the user the actual artifact "
         "filename returned by the tool.\n"
-        "- Explain that ADK web file upload integration is future work unless "
-        "the user provides file bytes/base64 through a tool or script pathway.\n"
+        "- This example intentionally demonstrates text artifacts, generated "
+        "PDF artifacts, listing, loading, and local export.\n"
         "Keep answers useful and concise. Mention filenames, versions, export "
         "paths, and memory usage when relevant."
     ),
@@ -77,9 +77,9 @@ root_agent = LlmAgent(
         remember_travel_preference,
         recall_travel_preferences,
         plan_trip,
+        list_saved_artifacts,
         save_text_artifact,
         save_itinerary_artifact,
-        save_base64_artifact,
         load_artifact,
         load_itinerary_artifact,
         generate_and_save_itinerary_pdf,
