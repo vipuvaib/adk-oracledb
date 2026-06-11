@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 from typing import NoReturn
+from urllib.parse import urlencode
 import uuid
 
 from google.genai import types
@@ -23,6 +24,8 @@ from oracle_env import require_env
 
 from adk_oracledb.artifacts import OracleArtifactService
 from adk_oracledb.artifacts import OracleArtifactServiceConfig
+from adk_oracledb.registry import register_oracle_services
+from google.adk.cli.service_registry import get_service_registry
 
 
 load_repo_env(__file__)
@@ -35,16 +38,31 @@ def _fail(message: str) -> NoReturn:
   raise SystemExit(message)
 
 
+def _table_prefix() -> str:
+  return os.environ.get("ORACLE_ARTIFACT_TABLE_PREFIX", "ADK_ART_SMOKE")
+
+
 def _config_from_env() -> OracleArtifactServiceConfig:
   return OracleArtifactServiceConfig(
       user=require_env("ORACLE_AI_DB_USER"),
       password=require_env("ORACLE_AI_DB_PASSWORD"),
       dsn=require_env("ORACLE_AI_DB_DSN"),
-      table_prefix=os.environ.get(
-          "ORACLE_ARTIFACT_TABLE_PREFIX", "ADK_ART_SMOKE"
-      ),
+      table_prefix=_table_prefix(),
       auto_create_tables=True,
   )
+
+
+def _registry_uri() -> str:
+  return f"oracle://?{urlencode({'artifact_table_prefix': _table_prefix()})}"
+
+
+def _registry_construction_smoke() -> None:
+  register_oracle_services()
+  registry = get_service_registry()
+  service = registry.create_artifact_service(_registry_uri())
+  if not isinstance(service, OracleArtifactService):
+    _fail("registry did not construct an OracleArtifactService for oracle://")
+  print("artifact registry construction smoke passed")
 
 
 def _assert_text(part: types.Part | None, expected: str, label: str) -> None:
@@ -74,6 +92,7 @@ def _assert_binary(
 
 
 async def main() -> None:
+  _registry_construction_smoke()
   service = OracleArtifactService(_config_from_env())
   smoke_id = uuid.uuid4().hex
   session_id = f"artifact-smoke-session-{smoke_id}"
@@ -155,6 +174,7 @@ async def main() -> None:
   assert latest_metadata.version == 1
   assert latest_metadata.mime_type == "text/plain"
   assert latest_metadata.custom_metadata["smoke_id"] == smoke_id
+  assert latest_metadata.canonical_uri.endswith("?version=1")
 
   all_metadata = await service.list_artifact_versions(
       app_name=APP_NAME,

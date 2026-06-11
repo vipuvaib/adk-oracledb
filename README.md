@@ -24,6 +24,28 @@ Avoid putting API keys or passwords in shell history. Explicit credentials in
 `oracle://user:password@host:port/service` URIs are still supported, but the
 examples prefer env-backed secret-free URIs.
 
+## Smoke Test Commands
+
+Core service smokes:
+
+```bash
+.venv/bin/python examples/session_smoke.py
+.venv/bin/python examples/artifact_smoke.py
+.venv/bin/python examples/memory_smoke.py
+```
+
+Example/e2e smokes:
+
+```bash
+.venv/bin/python examples/full_agent_oracle/run_smoke.py
+.venv/bin/python examples/full_agent_oracle_tools/run_smoke.py
+```
+
+The memory and full-agent smokes require the memory extra plus embedding
+provider configuration. `examples/artifact_smoke.py` directly tests
+OracleArtifactService `inline_data`/binary support. The tool-agent example
+intentionally demonstrates text and generated-PDF artifact flows only.
+
 ## OracleSessionService Smoke Tests
 
 Current status: the `OracleSessionService` MVP works locally for basic session
@@ -48,15 +70,12 @@ Run the manual smoke tests from the repository root:
 
 ```bash
 .venv/bin/python examples/session_smoke.py
-.venv/bin/python examples/session_append_event_smoke.py
 ```
 
-`examples/session_smoke.py` verifies automatic table creation plus
-`create_session`, `get_session`, `list_sessions`, and `delete_session`.
-
-`examples/session_append_event_smoke.py` verifies `append_event`, event reload as
-an ADK `Event`, and persistence of event `actions.state_delta` into session
-state.
+`examples/session_smoke.py` verifies automatic table creation, ServiceRegistry
+construction, `create_session`, `get_session`, `list_sessions`,
+`delete_session`, `append_event`, event reload as an ADK `Event`, and
+persistence of event `actions.state_delta` into session state.
 
 OracleSessionService smoke tests have passed locally against Oracle Database Free with `python-oracledb` 4.0.1 and 3.4.2.
 The 3.4.2 check is useful because Oracle memory work will integrate through `oracleagentmemory`, which currently uses the `python-oracledb` 3.x dependency line.
@@ -202,26 +221,6 @@ For example:
   --memory_service_uri 'oracle://?memory_table_prefix=ADK_TOOLS_AGENT_MEMORY' \
   --artifact_service_uri 'oracle://?artifact_table_prefix=ADK_TOOLS_AGENT_ART'
 ```
-
-## ServiceRegistry Smoke Test
-
-The registry smoke test creates Oracle session, memory, and artifact services
-through ADK's ServiceRegistry using `oracle://` URIs. It requires the memory
-extra and embedding provider credentials through `EMBEDDING_API_KEY`.
-
-```bash
-export ORACLE_AI_DB_USER=ADK_USER
-export ORACLE_AI_DB_PASSWORD=...
-export ORACLE_AI_DB_DSN=localhost:1521/FREEPDB1
-export EMBEDDING_MODEL=...
-export EMBEDDING_API_KEY=...
-
-.venv/bin/python examples/registry_smoke.py
-```
-
-With a local `.env`, use the canonical names from `.env.example` instead of
-exporting secrets in your shell.
-The registry smoke test has passed locally, validating oracle:// creation for session, memory, and artifact services through ADK ServiceRegistry.
 
 ## Full ADK Agent Examples
 

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 from typing import NoReturn
+from urllib.parse import urlencode
 import uuid
 
 from google.genai import types
@@ -22,8 +23,10 @@ from oracle_env import first_env
 from oracle_env import load_repo_env
 from oracle_env import require_env
 
+from adk_oracledb.registry import register_oracle_services
 from adk_oracledb.memory import OracleMemoryService
 from adk_oracledb.memory import OracleMemoryServiceConfig
+from google.adk.cli.service_registry import get_service_registry
 from google.adk.memory.memory_entry import MemoryEntry
 
 
@@ -38,14 +41,16 @@ def _fail(message: str) -> NoReturn:
   raise SystemExit(message)
 
 
+def _table_prefix() -> str:
+  return os.environ.get("ORACLE_MEMORY_TABLE_PREFIX", "ADK_MEMORY_SMOKE")
+
+
 def _config_from_env() -> OracleMemoryServiceConfig:
   return OracleMemoryServiceConfig(
       user=require_env("ORACLE_AI_DB_USER"),
       password=require_env("ORACLE_AI_DB_PASSWORD"),
       dsn=require_env("ORACLE_AI_DB_DSN"),
-      table_name_prefix=os.environ.get(
-          "ORACLE_MEMORY_TABLE_PREFIX", "ADK_MEMORY_SMOKE"
-      ),
+      table_name_prefix=_table_prefix(),
       schema_policy="create_if_necessary",
       embedder_model=require_env("EMBEDDING_MODEL"),
       embedder_api_base=first_env("EMBEDDING_ENDPOINT"),
@@ -59,6 +64,19 @@ def _config_from_env() -> OracleMemoryServiceConfig:
       llm_api_key=first_env("GENAI_API_KEY"),
       extract_memories=False,
   )
+
+
+def _registry_uri() -> str:
+  return f"oracle://?{urlencode({'memory_table_prefix': _table_prefix()})}"
+
+
+def _registry_construction_smoke() -> None:
+  register_oracle_services()
+  registry = get_service_registry()
+  service = registry.create_memory_service(_registry_uri())
+  if not isinstance(service, OracleMemoryService):
+    _fail("registry did not construct an OracleMemoryService for oracle://")
+  print("memory registry construction smoke passed")
 
 
 def _memory_text(memory: MemoryEntry) -> str:
@@ -82,6 +100,7 @@ def _looks_like_inserted_memory(memory: MemoryEntry, smoke_id: str) -> bool:
 
 
 async def main() -> None:
+  _registry_construction_smoke()
   service = OracleMemoryService(_config_from_env())
   smoke_id = f"adk-oracledb-memory-smoke-{uuid.uuid4().hex}"
   memory_text = f"{MEMORY_TEXT_PREFIX} Smoke id: {smoke_id}"
