@@ -10,7 +10,6 @@ from google.adk.memory.memory_entry import MemoryEntry
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
-_MAX_INLINE_BINARY_RESPONSE_BYTES = 200_000
 _EXPORTS_DIR = Path(__file__).resolve().parent / "exports"
 
 
@@ -33,8 +32,12 @@ def _require_positive_int(value: int, name: str) -> int:
   return value
 
 
+def _is_user_scoped(filename: str) -> bool:
+  return filename.startswith("user:")
+
+
 def _artifact_scope_from_filename(filename: str) -> str:
-  return "user" if filename.startswith("user:") else "session"
+  return "user" if _is_user_scoped(filename) else "session"
 
 
 def _normalize_text_filename(filename: str) -> str:
@@ -184,7 +187,7 @@ async def remember_travel_preference(
           parts=[types.Part.from_text(text=memory_text)],
       ),
       custom_metadata={
-          "source": "oracle_tools_agent",
+          "source": "oracle_travel_agent",
           "kind": "travel_preference",
       },
   )
@@ -192,7 +195,7 @@ async def remember_travel_preference(
   await tool_context.add_memory(
       memories=[memory],
       custom_metadata={
-          "source": "oracle_tools_agent",
+          "source": "oracle_travel_agent",
           "tool": "remember_travel_preference",
       },
   )
@@ -285,25 +288,22 @@ async def save_text_artifact(
     text: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Saves arbitrary text as an Oracle-backed ADK artifact.
-
-  Plain filenames are session-scoped. Filenames beginning with the literal
-  prefix "user:" are user-scoped. Do not replace the colon in "user:" with
-  "_". The result returns the actual filename used.
-  """
+  """Saves arbitrary text as an Oracle-backed ADK artifact."""
   filename = _normalize_text_filename(filename)
   text = _require_text_preserve(text, "text")
   version = await tool_context.save_artifact(
       filename,
       types.Part.from_text(text=text),
       custom_metadata={
-          "source": "oracle_tools_agent",
+          "source": "oracle_travel_agent",
           "kind": "text",
       },
   )
   return {
       "status": "saved",
       "filename": filename,
+      "requested_filename": filename,
+      "resolved_filename": filename,
       "scope": _artifact_scope_from_filename(filename),
       "version": version,
       "type": "text",
@@ -317,12 +317,7 @@ async def save_itinerary_artifact(
     itinerary: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Saves a text itinerary as an Oracle-backed ADK artifact.
-
-  Plain filenames are session-scoped. Filenames beginning with the literal
-  prefix "user:" are user-scoped. Do not replace the colon in "user:" with
-  "_". The result returns the actual filename used.
-  """
+  """Saves a text itinerary as an Oracle-backed ADK artifact."""
   result = await save_text_artifact(
       filename=filename,
       text=itinerary,
@@ -333,12 +328,7 @@ async def save_itinerary_artifact(
 
 
 async def list_saved_artifacts(tool_context: ToolContext) -> dict[str, object]:
-  """Lists artifact names available to this session/user context.
-
-  Plain filenames are session-scoped. Filenames beginning with the literal
-  prefix "user:" are user-scoped. Do not replace the colon in "user:" with
-  "_". The returned names are the actual artifact names.
-  """
+  """Lists artifact names available to this session/user context."""
   artifact_names = await tool_context.list_artifacts()
   return {
       "status": "listed",
@@ -351,61 +341,61 @@ async def load_artifact(
     filename: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Loads any saved text or inline_data artifact.
-
-  Plain filenames are session-scoped. Filenames beginning with the literal
-  prefix "user:" are user-scoped. Do not replace the colon in "user:" with
-  "_". The result reports the actual filename requested.
-  """
-  requested_filename = _require_text(filename, "filename")
-  filename = requested_filename
-  scope = _artifact_scope_from_filename(filename)
+  """Loads a saved text artifact or PDF artifact metadata by exact name."""
+  filename = _require_text(filename, "filename")
   artifact = await tool_context.load_artifact(filename)
   if artifact is None:
     return {
         "status": "not_found",
-        "requested_filename": requested_filename,
         "filename": filename,
-        "scope": scope,
+        "requested_filename": filename,
+        "resolved_filename": filename,
+        "scope": _artifact_scope_from_filename(filename),
     }
+
+  scope = _artifact_scope_from_filename(filename)
   if artifact.text is not None:
     return {
         "status": "loaded",
-        "requested_filename": requested_filename,
         "filename": filename,
+        "requested_filename": filename,
+        "resolved_filename": filename,
         "scope": scope,
         "kind": "text",
         "mime_type": "text/plain",
         "text": artifact.text,
         "size": len(artifact.text.encode("utf-8")),
     }
+
   if artifact.inline_data is not None:
     payload = _blob_data_to_bytes(artifact.inline_data.data)
     result: dict[str, object] = {
         "status": "loaded",
-        "requested_filename": requested_filename,
         "filename": filename,
+        "requested_filename": filename,
+        "resolved_filename": filename,
         "scope": scope,
         "kind": "inline_data",
         "mime_type": artifact.inline_data.mime_type,
         "size": len(payload),
-        "content_inlined": len(payload) <= _MAX_INLINE_BINARY_RESPONSE_BYTES,
+        "message": "Artifact contains inline data; use export_artifact_to_file to write it locally.",
     }
-    if len(payload) <= _MAX_INLINE_BINARY_RESPONSE_BYTES:
-      result["base64_data"] = base64.b64encode(payload).decode("ascii")
-    else:
-      result["message"] = "Artifact is too large to inline in the response."
-    if artifact.inline_data.mime_type == "application/pdf" and filename.lower().endswith(".pdf"):
+    if (
+        artifact.inline_data.mime_type == "application/pdf"
+        and filename.lower().endswith(".pdf")
+    ):
       companion_filename = _companion_text_filename_for_pdf(filename)
       companion = await tool_context.load_artifact(companion_filename)
       if companion is not None and companion.text is not None:
         result["companion_text_filename"] = companion_filename
         result["companion_text"] = companion.text
     return result
+
   return {
       "status": "loaded",
-      "requested_filename": requested_filename,
       "filename": filename,
+      "requested_filename": filename,
+      "resolved_filename": filename,
       "scope": scope,
       "kind": "unsupported",
       "mime_type": None,
@@ -417,40 +407,35 @@ async def load_itinerary_artifact(
     filename: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Loads a saved text itinerary artifact.
-
-  Plain filenames are session-scoped. Filenames beginning with the literal
-  prefix "user:" are user-scoped. Do not replace the colon in "user:" with
-  "_". The result reports the actual filename used.
-  """
-  requested_filename = _require_text(filename, "filename")
+  """Loads a saved text itinerary artifact by exact name."""
   filename = _normalize_text_filename(filename)
-  scope = _artifact_scope_from_filename(filename)
   result = await load_artifact(filename=filename, tool_context=tool_context)
   if result.get("status") == "not_found":
     return {
         "status": "not_found",
-        "requested_filename": requested_filename,
         "filename": filename,
-        "scope": scope,
+        "requested_filename": filename,
+        "resolved_filename": filename,
+        "scope": _artifact_scope_from_filename(filename),
         "text": "",
     }
   if result.get("kind") == "text":
     return {
         "status": "loaded",
-        "requested_filename": requested_filename,
         "filename": filename,
-        "scope": scope,
+        "requested_filename": filename,
+        "resolved_filename": filename,
+        "scope": _artifact_scope_from_filename(filename),
         "text": str(result.get("text", "")),
     }
   return {
-      "status": "not_text",
-      "requested_filename": requested_filename,
+      "status": "loaded",
       "filename": filename,
-      "scope": scope,
+      "requested_filename": filename,
+      "resolved_filename": filename,
+      "scope": _artifact_scope_from_filename(filename),
       "kind": result.get("kind", "unsupported"),
       "text": "",
-      "message": "Artifact is not text; use load_artifact for non-text artifacts.",
   }
 
 
@@ -460,15 +445,9 @@ async def generate_and_save_itinerary_pdf(
     itinerary: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Generates a simple PDF from itinerary text and saves it as an artifact.
-
-  Plain filenames are session-scoped. Filenames beginning with the literal
-  prefix "user:" are user-scoped. Do not replace the colon in "user:" with
-  "_". The result returns the actual PDF and companion text filenames used.
-  """
+  """Generates a simple PDF from itinerary text and saves it as an artifact."""
   filename = _ensure_pdf_filename(filename)
   companion_filename = _companion_text_filename_for_pdf(filename)
-  scope = _artifact_scope_from_filename(filename)
   itinerary = _require_text_preserve(itinerary, "itinerary")
   pdf_bytes = _simple_pdf_bytes(title=title, body=itinerary)
   pdf_version = await tool_context.save_artifact(
@@ -480,7 +459,7 @@ async def generate_and_save_itinerary_pdf(
           )
       ),
       custom_metadata={
-          "source": "oracle_tools_agent",
+          "source": "oracle_travel_agent",
           "kind": "itinerary_pdf",
       },
   )
@@ -488,7 +467,7 @@ async def generate_and_save_itinerary_pdf(
       companion_filename,
       types.Part.from_text(text=itinerary),
       custom_metadata={
-          "source": "oracle_tools_agent",
+          "source": "oracle_travel_agent",
           "kind": "itinerary_pdf_companion_text",
           "pdf_filename": filename,
       },
@@ -496,7 +475,9 @@ async def generate_and_save_itinerary_pdf(
   return {
       "status": "saved",
       "filename": filename,
-      "scope": scope,
+      "requested_filename": filename,
+      "resolved_filename": filename,
+      "scope": _artifact_scope_from_filename(filename),
       "version": pdf_version,
       "pdf_filename": filename,
       "pdf_version": pdf_version,
@@ -512,36 +493,32 @@ async def export_artifact_to_file(
     output_filename: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Exports a saved artifact to the local example exports directory.
-
-  Plain filenames are session-scoped. Filenames beginning with the literal
-  prefix "user:" are user-scoped. Do not replace the colon in "user:" with
-  "_". The result reports the requested source filename and local output path.
-  """
-  requested_filename = _require_text(filename, "filename")
-  filename = requested_filename
-  scope = _artifact_scope_from_filename(filename)
+  """Exports a saved artifact to the local example exports directory by exact name."""
+  filename = _require_text(filename, "filename")
   output_path = _safe_export_path(output_filename)
   artifact = await tool_context.load_artifact(filename)
   if artifact is None:
     return {
         "status": "not_found",
-        "requested_filename": requested_filename,
         "source_filename": filename,
-        "scope": scope,
+        "requested_filename": filename,
+        "resolved_filename": filename,
+        "scope": _artifact_scope_from_filename(filename),
         "output_path": str(output_path),
         "kind": "not_found",
         "mime_type": None,
         "size": 0,
     }
 
+  scope = _artifact_scope_from_filename(filename)
   if artifact.text is not None:
     payload = artifact.text.encode("utf-8")
     output_path.write_bytes(payload)
     return {
         "status": "exported",
-        "requested_filename": requested_filename,
         "source_filename": filename,
+        "requested_filename": filename,
+        "resolved_filename": filename,
         "scope": scope,
         "output_path": str(output_path),
         "kind": "text",
@@ -554,8 +531,9 @@ async def export_artifact_to_file(
     output_path.write_bytes(payload)
     return {
         "status": "exported",
-        "requested_filename": requested_filename,
         "source_filename": filename,
+        "requested_filename": filename,
+        "resolved_filename": filename,
         "scope": scope,
         "output_path": str(output_path),
         "kind": "inline_data",
@@ -565,8 +543,9 @@ async def export_artifact_to_file(
 
   return {
       "status": "unsupported",
-      "requested_filename": requested_filename,
       "source_filename": filename,
+      "requested_filename": filename,
+      "resolved_filename": filename,
       "scope": scope,
       "output_path": str(output_path),
       "kind": "unsupported",

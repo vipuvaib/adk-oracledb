@@ -12,12 +12,11 @@ import uuid
 from google.genai import types
 
 
-EXAMPLE_DIR = Path(__file__).resolve().parent
-EXAMPLES_DIR = EXAMPLE_DIR.parent
-REPO_ROOT = EXAMPLES_DIR.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
   sys.path.insert(0, str(SRC_DIR))
+EXAMPLES_DIR = REPO_ROOT / "examples"
 if str(EXAMPLES_DIR) not in sys.path:
   sys.path.insert(0, str(EXAMPLES_DIR))
 
@@ -26,17 +25,16 @@ from oracle_env import first_env
 from oracle_env import load_repo_env
 from oracle_env import require_env
 
+from adk_oracledb.registry import register_oracle_services
 from google.adk.cli.service_registry import get_service_registry
-from google.adk.cli.service_registry import load_services_module
-from google.adk.cli.utils.agent_loader import AgentLoader
 from google.adk.memory.memory_entry import MemoryEntry
 
 
 load_repo_env(__file__)
 configure_genai_provider_env()
 
-APP_NAME = "full_agent_oracle_smoke_app"
-USER_ID = "full_agent_oracle_smoke_user"
+APP_NAME = "registry_smoke_app"
+USER_ID = "registry_smoke_user"
 
 
 def _fail(message: str) -> NoReturn:
@@ -64,7 +62,7 @@ def _session_uri() -> str:
   return _oracle_uri(
       query={
           "table_prefix": os.environ.get(
-              "ORACLE_SESSION_TABLE_PREFIX", "ADK_FULL_AGENT"
+              "ORACLE_SESSION_TABLE_PREFIX", "ADK_REG_SMOKE"
           )
       }
   )
@@ -74,7 +72,7 @@ def _memory_uri() -> str:
   require_env("EMBEDDING_MODEL")
   query = {
       "memory_table_prefix": os.environ.get(
-          "ORACLE_MEMORY_TABLE_PREFIX", "ADK_FULL_AGENT_MEMORY"
+          "ORACLE_MEMORY_TABLE_PREFIX", "ADK_REG_MEMORY_SMOKE"
       ),
   }
   embedder_api_base = first_env("EMBEDDING_ENDPOINT")
@@ -99,8 +97,7 @@ def _artifact_uri() -> str:
   return _oracle_uri(
       query={
           "artifact_table_prefix": os.environ.get(
-              "ORACLE_ARTIFACT_TABLE_PREFIX",
-              "ADK_FULL_AGENT_ART",
+              "ORACLE_ARTIFACT_TABLE_PREFIX", "ADK_REG_ART_SMOKE"
           )
       }
   )
@@ -126,19 +123,9 @@ def _looks_like_inserted_memory(memory: MemoryEntry, smoke_id: str) -> bool:
   return smoke_id in text or smoke_id in metadata
 
 
-def _load_agent_and_services() -> None:
-  load_services_module(str(EXAMPLE_DIR))
-  agent_loader = AgentLoader(str(EXAMPLES_DIR))
-  root_agent = agent_loader.load_agent("full_agent_oracle")
-  if getattr(root_agent, "name", None) != "full_agent_oracle":
-    _fail("ADK AgentLoader did not load the full_agent_oracle root_agent")
-  print("full agent services.py registration loaded")
-  print(f"loaded ADK root agent: {root_agent.name}")
-
-
 async def _session_smoke(session_service: object, smoke_id: str) -> None:
   state = {
-      "source": "full-agent-oracle-smoke",
+      "source": "registry-smoke",
       "smoke_id": smoke_id,
   }
   created = await session_service.create_session(
@@ -146,7 +133,7 @@ async def _session_smoke(session_service: object, smoke_id: str) -> None:
       user_id=USER_ID,
       state=state,
   )
-  print(f"created full-agent Oracle session id: {created.id}")
+  print(f"created registry session id: {created.id}")
 
   loaded = await session_service.get_session(
       app_name=APP_NAME,
@@ -154,9 +141,9 @@ async def _session_smoke(session_service: object, smoke_id: str) -> None:
       session_id=created.id,
   )
   if loaded is None:
-    _fail("Oracle session get_session returned None after create_session")
+    _fail("registry session get_session returned None after create_session")
   if loaded.state.get("smoke_id") != smoke_id:
-    _fail("Oracle session state did not round-trip")
+    _fail("registry session state did not round-trip")
 
   await session_service.delete_session(
       app_name=APP_NAME,
@@ -169,14 +156,14 @@ async def _session_smoke(session_service: object, smoke_id: str) -> None:
       session_id=created.id,
   )
   if deleted is not None:
-    _fail("Oracle session get_session returned a session after delete")
-  print("full agent Oracle session smoke passed")
+    _fail("registry session get_session returned a session after delete")
+  print("registry session smoke passed")
 
 
 async def _memory_smoke(memory_service: object, smoke_id: str) -> None:
   memory_text = (
       "User likes Goa trips and beach resorts. "
-      f"Full agent smoke id: {smoke_id}"
+      f"Registry smoke id: {smoke_id}"
   )
   memory = MemoryEntry(
       id=smoke_id,
@@ -186,7 +173,7 @@ async def _memory_smoke(memory_service: object, smoke_id: str) -> None:
       ),
       custom_metadata={
           "smoke_id": smoke_id,
-          "source": "adk-oracledb-full-agent-smoke",
+          "source": "adk-oracledb-registry-smoke",
       },
   )
 
@@ -195,26 +182,26 @@ async def _memory_smoke(memory_service: object, smoke_id: str) -> None:
       user_id=USER_ID,
       memories=[memory],
   )
-  print(f"added full-agent Oracle memory id: {smoke_id}")
+  print(f"added registry memory id: {smoke_id}")
 
   response = await memory_service.search_memory(
       app_name=APP_NAME,
       user_id=USER_ID,
       query="Where does the user like to travel?",
   )
-  print(f"full-agent Oracle memory result count: {len(response.memories)}")
+  print(f"registry memory result count: {len(response.memories)}")
   if not response.memories:
-    _fail("Oracle memory search returned no results after add_memory")
+    _fail("registry memory search returned no results after add_memory")
   if not any(_looks_like_inserted_memory(item, smoke_id) for item in response.memories):
-    _fail("Oracle memory search did not return the inserted memory")
-  print("full agent Oracle memory smoke passed")
+    _fail("registry memory search did not return the inserted memory")
+  print("registry memory smoke passed")
 
 
 async def _artifact_smoke(artifact_service: object, smoke_id: str) -> None:
-  session_id = f"full-agent-artifact-session-{smoke_id}"
-  filename = f"full-agent-artifact-{smoke_id}.txt"
-  text_v0 = f"full agent artifact version zero {smoke_id}"
-  text_v1 = f"full agent artifact version one {smoke_id}"
+  session_id = f"registry-artifact-session-{smoke_id}"
+  filename = f"registry-artifact-{smoke_id}.txt"
+  text_v0 = f"registry artifact version zero {smoke_id}"
+  text_v1 = f"registry artifact version one {smoke_id}"
 
   version0 = await artifact_service.save_artifact(
       app_name=APP_NAME,
@@ -222,7 +209,7 @@ async def _artifact_smoke(artifact_service: object, smoke_id: str) -> None:
       session_id=session_id,
       filename=filename,
       artifact=types.Part.from_text(text=text_v0),
-      custom_metadata={"source": "full-agent-smoke", "version": 0},
+      custom_metadata={"source": "registry-smoke", "version": 0},
   )
   version1 = await artifact_service.save_artifact(
       app_name=APP_NAME,
@@ -230,9 +217,9 @@ async def _artifact_smoke(artifact_service: object, smoke_id: str) -> None:
       session_id=session_id,
       filename=filename,
       artifact=types.Part.from_text(text=text_v1),
-      custom_metadata={"source": "full-agent-smoke", "version": 1},
+      custom_metadata={"source": "registry-smoke", "version": 1},
   )
-  print(f"saved full-agent Oracle artifact versions: {version0}, {version1}")
+  print(f"saved registry artifact versions: {version0}, {version1}")
   assert [version0, version1] == [0, 1]
 
   loaded = await artifact_service.load_artifact(
@@ -242,7 +229,7 @@ async def _artifact_smoke(artifact_service: object, smoke_id: str) -> None:
       filename=filename,
   )
   if loaded is None or loaded.text != text_v1:
-    _fail("Oracle artifact latest load did not return version 1 content")
+    _fail("registry artifact latest load did not return version 1 content")
 
   versions = await artifact_service.list_versions(
       app_name=APP_NAME,
@@ -251,7 +238,7 @@ async def _artifact_smoke(artifact_service: object, smoke_id: str) -> None:
       filename=filename,
   )
   if versions != [0, 1]:
-    _fail(f"Oracle artifact versions mismatch: {versions}")
+    _fail(f"registry artifact versions mismatch: {versions}")
 
   await artifact_service.delete_artifact(
       app_name=APP_NAME,
@@ -266,12 +253,12 @@ async def _artifact_smoke(artifact_service: object, smoke_id: str) -> None:
       filename=filename,
   )
   if deleted is not None:
-    _fail("Oracle artifact load returned data after delete")
-  print("full agent Oracle artifact smoke passed")
+    _fail("registry artifact load returned data after delete")
+  print("registry artifact smoke passed")
 
 
 async def main() -> None:
-  _load_agent_and_services()
+  register_oracle_services()
   registry = get_service_registry()
 
   session_service = registry.create_session_service(_session_uri())
@@ -285,11 +272,11 @@ async def main() -> None:
   if artifact_service is None:
     _fail("registry did not create Oracle artifact service")
 
-  smoke_id = f"adk-oracledb-full-agent-smoke-{uuid.uuid4().hex}"
+  smoke_id = f"adk-oracledb-registry-smoke-{uuid.uuid4().hex}"
   await _session_smoke(session_service, smoke_id)
   await _memory_smoke(memory_service, smoke_id)
   await _artifact_smoke(artifact_service, smoke_id)
-  print("full agent Oracle example smoke completed successfully")
+  print("registry smoke completed successfully")
 
 
 if __name__ == "__main__":

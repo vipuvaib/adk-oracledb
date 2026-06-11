@@ -1,191 +1,59 @@
 # adk-oracledb
 
-Oracle Database integration package for Google ADK.
+Oracle Database backend services for Google ADK Python.
 
-## Local .env Configuration
+`adk-oracledb` lets ADK agents use Oracle Database as the durable runtime
+backend for sessions, long-term memory, and artifacts. Agents remain standard
+Google ADK agents; Oracle is selected through ADK service configuration and the
+`oracle://` service registry scheme.
 
-Local secrets and runtime settings can live in a repo-root `.env` file. The
-examples load it without printing values. `.env` is ignored by git; use
-`.env.example` as the safe template to copy from. `.venv` is for Python
-packages, while `.env` is for runtime configuration and secrets.
+## What it provides
 
-The examples use these shared names:
+- `OracleSessionService` for ADK sessions, state, and event history.
+- `OracleMemoryService` for durable semantic memory through `oracleagentmemory`.
+- `OracleArtifactService` for ADK artifacts such as text and generated PDFs,
+  with versions and metadata.
+- `oracle://` ServiceRegistry factories for ADK CLI and ADK Web.
+- Example ADK agents that run with Oracle-backed sessions, memory, and
+  artifacts.
 
-- `ORACLE_AI_DB_USER`, `ORACLE_AI_DB_PASSWORD`, `ORACLE_AI_DB_DSN` for Oracle.
-- `GENAI_MODEL`, `GENAI_ENDPOINT`, `GENAI_API_KEY` for the agent LLM.
-- `EMBEDDING_MODEL`, `EMBEDDING_ENDPOINT`, `EMBEDDING_API_KEY` for memory embeddings.
-- `EMBEDDING_ENCODING_FORMAT`, `EMBEDDING_INPUT_TYPE`,
-  `EMBEDDING_QUERY_INPUT_TYPE`, and `EMBEDDING_DOCUMENT_INPUT_TYPE` for optional
-  embedding request parameters.
-- `ORACLE_SESSION_TABLE_PREFIX`, `ORACLE_MEMORY_TABLE_PREFIX`, and
-  `ORACLE_ARTIFACT_TABLE_PREFIX` for optional table prefix defaults.
+## Why Oracle Database for ADK agents
 
-Avoid putting API keys or passwords in shell history. Explicit credentials in
-`oracle://user:password@host:port/service` URIs are still supported, but the
-examples prefer env-backed secret-free URIs.
+Agent applications need more than a vector store. They need durable session
+state, replayable event history, scoped long-term memory, generated files,
+metadata, and enterprise database controls. Oracle Database brings these pieces
+into one backend:
 
-## Smoke Test Commands
+- Native JSON stores ADK session state, event payloads, and artifact metadata.
+- Transactions keep session event append and state updates in one durable
+  boundary.
+- Oracle Agent Memory and Oracle vector capabilities support semantic memory
+  retrieval.
+- BLOB-backed artifact storage keeps generated files together with metadata
+  and versions.
+- A single Oracle schema can back multiple ADK apps through configurable table
+  prefixes.
 
-Core service smokes:
+## How it operates
 
-```bash
-.venv/bin/python tests/smoke/session_smoke.py
-.venv/bin/python tests/smoke/artifact_smoke.py
-.venv/bin/python tests/smoke/memory_smoke.py
+```text
+ADK CLI / ADK Web
+        |
+        v
+ADK Runner and Agent
+        |
+        v
+ADK ServiceRegistry
+        |
+        v
+oracle:// service factories
+        |
+        +--> OracleSessionService  --> Oracle Database
+        +--> OracleMemoryService   --> Oracle Database / oracleagentmemory
+        +--> OracleArtifactService --> Oracle Database
 ```
 
-Example/e2e smokes:
-
-```bash
-.venv/bin/python examples/full_agent_oracle/run_smoke.py
-.venv/bin/python examples/full_agent_oracle_tools/run_smoke.py
-```
-
-The memory and full-agent smokes require the memory extra plus embedding
-provider configuration. `tests/smoke/artifact_smoke.py` directly tests
-OracleArtifactService `inline_data`/binary support. The tool-agent example
-intentionally demonstrates text and generated-PDF artifact flows only.
-
-## OracleSessionService Smoke Tests
-
-Current status: the `OracleSessionService` MVP works locally for basic session
-storage against Oracle Database.
-
-Required local setup:
-
-- Oracle Database Free running locally, for example in Docker.
-- An Oracle schema/user such as `ADK_USER` created with privileges to create
-  tables, constraints, and indexes.
-
-Configure the smoke tests with environment variables:
-
-```bash
-export ORACLE_AI_DB_USER=ADK_USER
-export ORACLE_AI_DB_PASSWORD=...
-export ORACLE_AI_DB_DSN=localhost:1521/FREEPDB1
-export ORACLE_SESSION_TABLE_PREFIX=ADK_SMOKE
-```
-
-Run the manual smoke tests from the repository root:
-
-```bash
-.venv/bin/python tests/smoke/session_smoke.py
-```
-
-`tests/smoke/session_smoke.py` verifies automatic table creation, ServiceRegistry
-construction, `create_session`, `get_session`, `list_sessions`,
-`delete_session`, `append_event`, event reload as an ADK `Event`, and
-persistence of event `actions.state_delta` into session state.
-
-OracleSessionService smoke tests have passed locally against Oracle Database Free with `python-oracledb` 4.0.1 and 3.4.2.
-The 3.4.2 check is useful because Oracle memory work will integrate through `oracleagentmemory`, which currently uses the `python-oracledb` 3.x dependency line.
-
-## OracleMemoryService Status
-
-`OracleMemoryService` has initial search, direct `add_memory`, event ingestion,
-and session ingestion wiring. Real Oracle/oracleagentmemory smoke tests are
-still pending.
-
-Install memory dependencies with:
-
-```bash
-pip install "adk-oracledb[memory]"
-```
-
-## OracleMemoryService Smoke Test
-
-`OracleMemoryService` has initial method wiring for search, direct memory writes,
-event ingestion, and session ingestion. The current manual memory smoke test
-only verifies direct `add_memory` plus `search_memory`.
-
-The manual OracleMemoryService smoke test has passed locally using
-`oracleagentmemory` 26.4.0, `python-oracledb` 3.4.2, Oracle Database Free,
-and Cohere `embed-english-light-v3.0`.
-
-Install the memory extra in a local development checkout:
-
-```bash
-pip install -e ".[memory]"
-```
-
-`oracleagentmemory` 26.4.0 currently requires `oracledb>=3.4.2,<4`.
-
-The Oracle user may need additional privileges beyond the session smoke tests.
-Run grants like these as `SYSTEM` or another admin user if needed:
-
-```sql
-GRANT CREATE SESSION TO ADK_USER;
-GRANT CREATE TABLE TO ADK_USER;
-GRANT CREATE SEQUENCE TO ADK_USER;
-GRANT CREATE VIEW TO ADK_USER;
-GRANT CREATE PROCEDURE TO ADK_USER;
-```
-
-The memory smoke test requires an embedding model configuration. Depending on
-the model/provider, `oracleagentmemory` may call an external embedding service.
-
-```bash
-export ORACLE_AI_DB_USER=ADK_USER
-export ORACLE_AI_DB_PASSWORD=...
-export ORACLE_AI_DB_DSN=localhost:1521/FREEPDB1
-export ORACLE_MEMORY_TABLE_PREFIX=ADK_MEMORY_SMOKE
-export EMBEDDING_MODEL=...
-
-.venv/bin/python tests/smoke/memory_smoke.py
-```
-
-Optional provider settings:
-
-```bash
-export EMBEDDING_ENDPOINT=...
-export EMBEDDING_API_KEY=...
-export EMBEDDING_ENCODING_FORMAT=float
-export EMBEDDING_INPUT_TYPE=query
-export GENAI_MODEL=...
-export GENAI_ENDPOINT=...
-export GENAI_API_KEY=...
-```
-
-Some OpenAI-compatible NIM embedding endpoints require
-`EMBEDDING_ENCODING_FORMAT=float` and `EMBEDDING_INPUT_TYPE=query`. Leave these
-unset for providers that do not need them. If a provider requires different
-values for search-query embeddings and stored-memory embeddings, use
-`EMBEDDING_QUERY_INPUT_TYPE` and `EMBEDDING_DOCUMENT_INPUT_TYPE` instead of the
-single `EMBEDDING_INPUT_TYPE`.
-
-MCP tools are not implemented yet.
-
-## OracleArtifactService Status
-
-`OracleArtifactService` has initial schema, save/load, list/delete, and version
-metadata wiring. Manual artifact operation smoke has passed locally.
-
-## OracleArtifactService Smoke Test
-
-Configure Oracle connection settings:
-
-```bash
-export ORACLE_AI_DB_USER=ADK_USER
-export ORACLE_AI_DB_PASSWORD=...
-export ORACLE_AI_DB_DSN=localhost:1521/FREEPDB1
-export ORACLE_ARTIFACT_TABLE_PREFIX=ADK_ART_SMOKE
-```
-
-Run the artifact smoke test from the repository root:
-
-```bash
-.venv/bin/python tests/smoke/artifact_smoke.py
-```
-The reusable OracleArtifactService smoke test has passed locally against Oracle Database Free.
-
-The smoke script verifies text artifact versioning, binary `inline_data`
-round-trip, ADK `user:` namespace behavior, key listing, version metadata, and
-delete behavior.
-
-## ServiceRegistry oracle:// Support
-
-To use `oracle://` URIs with ADK CLI service options, register the Oracle
-factories from your agent's `services.py`:
+Register the Oracle services from an ADK `services.py` file:
 
 ```python
 from adk_oracledb.registry import register_oracle_services
@@ -193,38 +61,206 @@ from adk_oracledb.registry import register_oracle_services
 register_oracle_services()
 ```
 
-Then run ADK with Oracle-backed services:
+Then pass `oracle://` service URIs to ADK:
 
 ```bash
-adk web my_agent \
-  --session_service_uri 'oracle://?table_prefix=ADK' \
-  --memory_service_uri 'oracle://?memory_table_prefix=ADK_MEMORY' \
-  --artifact_service_uri 'oracle://?artifact_table_prefix=ADK_ART'
+adk web examples \
+  --session_service_uri 'oracle://?table_prefix=ADK_AGENT' \
+  --memory_service_uri 'oracle://?memory_table_prefix=ADK_AGENT_MEMORY' \
+  --artifact_service_uri 'oracle://?artifact_table_prefix=ADK_AGENT_ART'
 ```
 
-Credentials and DSN may be omitted from `oracle://` URIs when
-`ORACLE_AI_DB_USER`, `ORACLE_AI_DB_PASSWORD`, and `ORACLE_AI_DB_DSN` are set in
-the environment. Passwords with special characters must be URL-encoded only
-when they are included in the URI. Table prefixes can be supplied in URI query
-parameters or with env vars such as `ORACLE_SESSION_TABLE_PREFIX`,
-`ORACLE_MEMORY_TABLE_PREFIX`, and `ORACLE_ARTIFACT_TABLE_PREFIX`. If the default
-prefixes are acceptable, bare `oracle://` URIs are also valid with env fallback.
-The memory URI requires the memory extra and an embedder model from
-`EMBEDDING_MODEL` or an explicit `embedder_model` query parameter. Registration
-itself does not connect to Oracle.
+Credentials can come from environment variables, so the URI can stay free of
+passwords and API keys.
 
-For example:
+## Installation
+
+For local development:
 
 ```bash
-.venv/bin/adk run examples/full_agent_oracle_tools \
-  --session_service_uri 'oracle://?table_prefix=ADK_TOOLS_AGENT' \
-  --memory_service_uri 'oracle://?memory_table_prefix=ADK_TOOLS_AGENT_MEMORY' \
-  --artifact_service_uri 'oracle://?artifact_table_prefix=ADK_TOOLS_AGENT_ART'
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[memory]"
 ```
 
-## Full ADK Agent Examples
+The memory extra installs `oracleagentmemory`, which is used by
+`OracleMemoryService`.
 
-`examples/full_agent_oracle` shows registry-backed Oracle services with a small
-loadable ADK agent. `examples/full_agent_oracle_tools` adds explicit
-memory/artifact tool usage, travel planning, and text/generated-PDF artifact
-round trips with local artifact export.
+## Configuration
+
+Create a repo-root `.env` from `.env.example`:
+
+```bash
+cp .env.example .env
+```
+
+Core Oracle settings:
+
+```bash
+ORACLE_AI_DB_USER=ADK_USER
+ORACLE_AI_DB_PASSWORD=...
+ORACLE_AI_DB_DSN=localhost:1521/FREEPDB1
+```
+
+Agent model settings:
+
+```bash
+GENAI_MODEL=...
+GENAI_ENDPOINT=...
+GENAI_API_KEY=...
+```
+
+Embedding settings for memory:
+
+```bash
+EMBEDDING_MODEL=...
+EMBEDDING_ENDPOINT=...
+EMBEDDING_API_KEY=...
+```
+
+Optional embedding request parameters are available for OpenAI-compatible
+providers that require them:
+
+```bash
+EMBEDDING_ENCODING_FORMAT=float
+EMBEDDING_INPUT_TYPE=
+EMBEDDING_QUERY_INPUT_TYPE=query
+EMBEDDING_DOCUMENT_INPUT_TYPE=passage
+```
+
+For symmetric embedding providers, leave the input-type fields blank. For
+asymmetric providers, use the query/document split so search queries and stored
+memory records are embedded with the provider's expected modes.
+
+Optional table prefix defaults:
+
+```bash
+ORACLE_SESSION_TABLE_PREFIX=ADK
+ORACLE_MEMORY_TABLE_PREFIX=ADK_MEMORY
+ORACLE_ARTIFACT_TABLE_PREFIX=ADK_ART
+```
+
+Shell-exported variables take precedence over values loaded from `.env`.
+
+## Service URI forms
+
+Env-backed URI:
+
+```text
+oracle://?table_prefix=ADK_AGENT
+```
+
+Explicit database URI:
+
+```text
+oracle://ADK_USER:<url-encoded-password>@localhost:1521/FREEPDB1?table_prefix=ADK_AGENT
+```
+
+Service-specific table prefix parameters:
+
+```text
+table_prefix=ADK_AGENT
+memory_table_prefix=ADK_AGENT_MEMORY
+artifact_table_prefix=ADK_AGENT_ART
+```
+
+The memory service also accepts provider settings in the URI, including
+`embedder_model`, `embedder_api_base`, `embedder_encoding_format`,
+`embedder_input_type`, `embedder_query_input_type`, and
+`embedder_document_input_type`.
+
+## Examples
+
+### Oracle runtime services agent
+
+`examples/oracle_runtime_agent` shows the complete ADK runtime-service path:
+ADK loads the agent, loads `services.py`, registers `oracle://`, and creates
+Oracle-backed session, memory, and artifact services through ServiceRegistry.
+
+Run its validation flow:
+
+```bash
+.venv/bin/python examples/oracle_runtime_agent/run_smoke.py
+```
+
+Run it interactively:
+
+```bash
+adk run examples/oracle_runtime_agent \
+  --session_service_uri 'oracle://?table_prefix=ADK_RUNTIME_AGENT' \
+  --memory_service_uri 'oracle://?memory_table_prefix=ADK_RUNTIME_AGENT_MEMORY' \
+  --artifact_service_uri 'oracle://?artifact_table_prefix=ADK_RUNTIME_AGENT_ART'
+```
+
+### Oracle travel agent
+
+`examples/oracle_travel_agent` is a tool-enabled ADK travel planner. It uses
+Oracle-backed memory to remember and recall preferences, then saves generated
+itineraries and PDFs as Oracle-backed ADK artifacts.
+
+Run its validation flow:
+
+```bash
+.venv/bin/python examples/oracle_travel_agent/run_smoke.py
+```
+
+Run it through ADK:
+
+```bash
+adk run examples/oracle_travel_agent \
+  --session_service_uri 'oracle://?table_prefix=ADK_TRAVEL_AGENT' \
+  --memory_service_uri 'oracle://?memory_table_prefix=ADK_TRAVEL_AGENT_MEMORY' \
+  --artifact_service_uri 'oracle://?artifact_table_prefix=ADK_TRAVEL_AGENT_ART'
+```
+
+Useful prompts:
+
+```text
+Remember that I prefer 8-day mid-budget trekking and cultural trips.
+Plan an 8-day mid-budget trip to Nepal using my preferences.
+Save that itinerary as user:nepal_itinerary.
+Generate and save that itinerary as PDF named user:nepal_itinerary.pdf.
+List my saved artifacts.
+Load user:nepal_itinerary.pdf.
+Export user:nepal_itinerary.pdf to nepal_itinerary.pdf.
+```
+
+Use the `user:` filename prefix when an artifact should be available across
+sessions for the same app and user.
+
+## Artifact scope
+
+ADK artifact names control visibility:
+
+```text
+filename.txt       session-scoped artifact
+user:filename.txt  user-scoped artifact
+```
+
+Use user-scoped artifacts for durable files such as saved itineraries, reports,
+and generated PDFs that should be available across sessions. The services
+preserve ADK's filename-based scope semantics: plain filenames stay session
+scoped, and `user:` filenames are user scoped.
+
+## Validation scripts
+
+The repository includes focused validation scripts for each service and the
+registry path:
+
+```bash
+.venv/bin/python tests/smoke/session_smoke.py
+.venv/bin/python tests/smoke/memory_smoke.py
+.venv/bin/python tests/smoke/artifact_smoke.py
+.venv/bin/python tests/smoke/registry_smoke.py
+.venv/bin/python examples/oracle_runtime_agent/run_smoke.py
+.venv/bin/python examples/oracle_travel_agent/run_smoke.py
+```
+
+The memory and end-to-end agent validation flows require the memory extra and an
+embedding provider configuration.
+
+## Secret handling
+
+Keep local secrets in `.env` or shell environment variables. Do not commit
+`.env`, API keys, or database passwords. If credentials are placed directly in
+an `oracle://` URI, URL-encode passwords that contain special characters.

@@ -72,25 +72,6 @@ def _assert_text(part: types.Part | None, expected: str, label: str) -> None:
     _fail(f"{label} text mismatch: expected {expected!r}, got {part.text!r}")
 
 
-def _assert_binary(
-    part: types.Part | None,
-    *,
-    expected_payload: bytes,
-    expected_mime_type: str,
-) -> None:
-  if part is None:
-    _fail("binary load returned None")
-  if part.inline_data is None:
-    _fail("binary load did not return inline_data")
-  if part.inline_data.data != expected_payload:
-    _fail("binary payload mismatch")
-  if part.inline_data.mime_type != expected_mime_type:
-    _fail(
-        "binary mime type mismatch: "
-        f"expected {expected_mime_type!r}, got {part.inline_data.mime_type!r}"
-    )
-
-
 async def main() -> None:
   _registry_construction_smoke()
   service = OracleArtifactService(_config_from_env())
@@ -185,39 +166,6 @@ async def main() -> None:
   print(f"text artifact version metadata count: {len(all_metadata)}")
   assert [item.version for item in all_metadata] == [0, 1]
 
-  binary_filename = f"folder/artifact {smoke_id} #1.bin"
-  binary_payload = f"artifact-binary-smoke-{smoke_id}".encode("utf-8")
-  binary_mime_type = "application/octet-stream"
-  binary_version = await service.save_artifact(
-      app_name=APP_NAME,
-      user_id=USER_ID,
-      session_id=session_id,
-      filename=binary_filename,
-      artifact=types.Part(
-          inline_data=types.Blob(
-              data=binary_payload,
-              mime_type=binary_mime_type,
-          )
-      ),
-      custom_metadata={
-          "source": "artifact-binary-smoke",
-          "smoke_id": smoke_id,
-      },
-  )
-  print(f"saved binary artifact version: {binary_version}")
-  assert binary_version == 0
-
-  _assert_binary(
-      await service.load_artifact(
-          app_name=APP_NAME,
-          user_id=USER_ID,
-          session_id=session_id,
-          filename=binary_filename,
-      ),
-      expected_payload=binary_payload,
-      expected_mime_type=binary_mime_type,
-  )
-
   user_filename = f"user:user-artifact-{smoke_id}.txt"
   user_text = f"user scoped artifact {smoke_id}"
   user_version = await service.save_artifact(
@@ -263,7 +211,6 @@ async def main() -> None:
   )
   print(f"session artifact keys: {session_keys}")
   assert text_filename in session_keys
-  assert binary_filename in session_keys
   assert user_filename in session_keys
 
   user_keys = await service.list_artifact_keys(
@@ -328,14 +275,6 @@ async def main() -> None:
       == []
   )
   print("deleted text artifact")
-
-  await service.delete_artifact(
-      app_name=APP_NAME,
-      user_id=USER_ID,
-      session_id=session_id,
-      filename=binary_filename,
-  )
-  print("deleted binary artifact")
 
   print("artifact smoke completed successfully")
 

@@ -4,7 +4,7 @@
 -- changed, generated DDL should replace the ADK_ prefix in table, constraint,
 -- and index names with the configured prefix.
 --
--- This MVP uses Oracle's native JSON type. For older Oracle versions that do not
+-- This schema uses Oracle's native JSON type. For older Oracle versions that do not
 -- support JSON columns, replace each JSON column with:
 --   CLOB CHECK (<column_name> IS JSON)
 

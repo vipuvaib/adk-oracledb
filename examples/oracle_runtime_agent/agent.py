@@ -17,11 +17,11 @@ from oracle_env import load_repo_env
 load_repo_env(__file__)
 
 root_agent = LlmAgent(
-    name="full_agent_oracle",
+    name="oracle_runtime_agent",
     model=agent_model_from_env(),
-    description="A small travel preference assistant backed by Oracle services.",
+    description="A travel preference assistant backed by Oracle ADK runtime services.",
     instruction=(
-        "You are a concise travel preference assistant. Remember durable user "
+        "You are an Oracle-backed travel preference assistant. Remember durable user "
         "travel preferences when the configured memory service is available, "
         "and keep answers practical and brief."
     ),

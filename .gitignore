@@ -1,13 +1,30 @@
 .venv/
 .venv-*/
+.venv*/
 *.egg-info/
+build/
+dist/
+
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
 .idea/
+.vscode/
 .DS_Store
 
-.venv*/
 .env
 .env.*
 !.env.example
 .local_env
+
+# Example-generated export files
+examples/oracle_travel_agent/exports/*
+!examples/oracle_travel_agent/exports/.gitignore

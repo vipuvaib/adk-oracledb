@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -45,8 +44,8 @@ from tools import save_text_artifact
 load_repo_env(__file__)
 configure_genai_provider_env()
 
-APP_NAME = "oracle_tools_agent_smoke_app"
-USER_ID = "oracle_tools_agent_smoke_user"
+APP_NAME = "oracle_travel_agent_smoke_app"
+USER_ID = "oracle_travel_agent_smoke_user"
 
 
 def _fail(message: str) -> NoReturn:
@@ -74,7 +73,7 @@ def _session_uri() -> str:
   return _oracle_uri(
       query={
           "table_prefix": os.environ.get(
-              "ORACLE_SESSION_TABLE_PREFIX", "ADK_TOOLS_AGENT"
+              "ORACLE_SESSION_TABLE_PREFIX", "ADK_TRAVEL_AGENT"
           )
       }
   )
@@ -85,7 +84,7 @@ def _memory_uri() -> str:
   query = {
       "memory_table_prefix": os.environ.get(
           "ORACLE_MEMORY_TABLE_PREFIX",
-          "ADK_TOOLS_AGENT_MEMORY",
+          "ADK_TRAVEL_AGENT_MEMORY",
       ),
   }
   embedder_api_base = first_env("EMBEDDING_ENDPOINT")
@@ -111,7 +110,7 @@ def _artifact_uri() -> str:
       query={
           "artifact_table_prefix": os.environ.get(
               "ORACLE_ARTIFACT_TABLE_PREFIX",
-              "ADK_TOOLS_AGENT_ART",
+              "ADK_TRAVEL_AGENT_ART",
           )
       }
   )
@@ -224,13 +223,13 @@ class SmokeToolContext:
 def _load_agent_and_services() -> None:
   load_services_module(str(EXAMPLE_DIR))
   agent_loader = AgentLoader(str(EXAMPLES_DIR))
-  root_agent = agent_loader.load_agent("full_agent_oracle_tools")
-  if getattr(root_agent, "name", None) != "oracle_tools_agent":
-    _fail("ADK AgentLoader did not load the oracle_tools_agent root_agent")
+  root_agent = agent_loader.load_agent("oracle_travel_agent")
+  if getattr(root_agent, "name", None) != "oracle_travel_agent":
+    _fail("ADK AgentLoader did not load the oracle_travel_agent root_agent")
   tools = getattr(root_agent, "tools", []) or []
   if len(tools) < 10:
-    _fail(f"Expected at least 10 tools on oracle_tools_agent, found {len(tools)}")
-  print("oracle tools agent services.py registration loaded")
+    _fail(f"Expected at least 10 tools on oracle_travel_agent, found {len(tools)}")
+  print("oracle travel agent services.py registration loaded")
   print(f"loaded ADK root agent: {root_agent.name}")
 
 
@@ -252,7 +251,7 @@ async def _make_context(smoke_id: str) -> tuple[object, SmokeToolContext]:
       app_name=APP_NAME,
       user_id=USER_ID,
       state={
-          "source": "oracle-tools-agent-smoke",
+          "source": "oracle-travel-agent-validation",
           "smoke_id": smoke_id,
       },
   )
@@ -282,13 +281,13 @@ async def _memory_tool_smoke(tool_context: SmokeToolContext, smoke_id: str) -> N
       query="travel preferences budget duration nature culture",
       tool_context=tool_context,
   )
-  print(f"oracle tools memory result count: {recall_result['count']}")
+  print(f"oracle travel agent memory result count: {recall_result['count']}")
   if recall_result["count"] < 1:
     _fail("recall_travel_preferences returned no memories")
   haystack = _memory_result_text(recall_result)
   if smoke_id.lower() not in haystack and "mid-budget nature" not in haystack:
     _fail("recall_travel_preferences did not return the stored preference")
-  print("oracle tools memory tool smoke passed")
+  print("oracle travel agent memory tool validation passed")
 
 
 async def _planning_smoke(
@@ -334,17 +333,14 @@ async def _planning_smoke(
       "Day 8: Morning low-effort market visit; afternoon departure buffer; "
       "evening flight or final dinner.\n"
   )
-  print("oracle tools planning smoke passed")
+  print("oracle travel agent planning validation passed")
   return itinerary
 
 
 async def _text_artifact_smoke(
-    tool_context: SmokeToolContext,
-    smoke_id: str,
-    artifact_base: str,
-    itinerary: str,
-) -> None:
-  filename = f"user:oracle-tools-text-itinerary-{smoke_id}"
+    tool_context: SmokeToolContext, smoke_id: str, itinerary: str
+) -> str:
+  filename = f"user:oracle-travel-text-itinerary-{smoke_id}"
   save_result = await save_text_artifact(
       filename=filename,
       text=itinerary,
@@ -397,85 +393,78 @@ async def _text_artifact_smoke(
   if load_result.get("scope") != "user":
     _fail(f"load_artifact did not report user scope: {load_result}")
 
+  itinerary_filename = f"user:oracle-travel-itinerary-{smoke_id}"
   itinerary_result = await save_itinerary_artifact(
-      filename=artifact_base,
+      filename=itinerary_filename,
       itinerary=itinerary,
       tool_context=tool_context,
   )
-  expected_text_filename = f"{artifact_base}.txt"
-  if itinerary_result.get("filename") != expected_text_filename:
-    _fail(
-        "user: prefix was not preserved by save_itinerary_artifact: "
-        f"{itinerary_result}"
-    )
+  resolved_text_filename = str(itinerary_result.get("resolved_filename", ""))
+  if resolved_text_filename != f"{itinerary_filename}.txt":
+    _fail(f"save_itinerary_artifact did not normalize expected filename: {itinerary_result}")
   if itinerary_result.get("scope") != "user":
     _fail(f"save_itinerary_artifact did not report user scope: {itinerary_result}")
+
   loaded_itinerary = await load_itinerary_artifact(
-      filename=artifact_base,
+      filename=resolved_text_filename,
       tool_context=tool_context,
   )
-  if loaded_itinerary.get("filename") != expected_text_filename:
-    _fail(
-        "load_itinerary_artifact did not normalize with user: intact: "
-        f"{loaded_itinerary}"
-    )
+  if loaded_itinerary["text"] != itinerary:
+    _fail("load_itinerary_artifact did not return the saved itinerary")
+  if loaded_itinerary.get("resolved_filename") != resolved_text_filename:
+    _fail(f"load_itinerary_artifact did not report expected file: {loaded_itinerary}")
   if loaded_itinerary.get("scope") != "user":
     _fail(f"load_itinerary_artifact did not report user scope: {loaded_itinerary}")
-  if loaded_itinerary["text"] != itinerary:
-    _fail("load_itinerary_artifact compatibility path failed")
-  print("oracle tools text artifact smoke passed")
+  print("oracle travel agent text artifact validation passed")
+  return resolved_text_filename
 
 
 async def _pdf_artifact_smoke(
-    tool_context: SmokeToolContext,
-    artifact_base: str,
-    itinerary: str,
+    tool_context: SmokeToolContext, smoke_id: str, itinerary: str
 ) -> str:
+  pdf_filename = f"user:oracle-travel-itinerary-{smoke_id}.pdf"
   save_result = await generate_and_save_itinerary_pdf(
-      filename=artifact_base,
+      filename=pdf_filename,
       title="Nepal Itinerary",
       itinerary=itinerary,
       tool_context=tool_context,
   )
   if save_result["status"] != "saved":
     _fail(f"generate_and_save_itinerary_pdf failed: {save_result}")
-  expected_pdf_filename = f"{artifact_base}.pdf"
-  expected_companion_filename = f"{artifact_base}.txt"
-  if save_result.get("pdf_filename") != expected_pdf_filename:
-    _fail(f"PDF filename did not preserve user: prefix: {save_result}")
-  if save_result.get("companion_text_filename") != expected_companion_filename:
-    _fail(f"PDF companion filename did not preserve user: prefix: {save_result}")
+  saved_filename = str(save_result["filename"])
+  if saved_filename != pdf_filename:
+    _fail(f"generate_and_save_itinerary_pdf saved an unexpected filename: {save_result}")
   if save_result.get("scope") != "user":
     _fail(f"PDF save did not report user scope: {save_result}")
+
   companion_filename = str(save_result["companion_text_filename"])
-  if not companion_filename.endswith(".txt"):
-    _fail(f"PDF companion text filename was not returned: {save_result}")
-  pdf_filename = str(save_result["pdf_filename"])
+  if companion_filename != f"user:oracle-travel-itinerary-{smoke_id}.txt":
+    _fail(f"PDF companion text filename was not returned as expected: {save_result}")
+
   load_result = await load_artifact(
-      filename=pdf_filename,
+      filename=saved_filename,
       tool_context=tool_context,
   )
   if load_result["status"] != "loaded":
     _fail(f"load_artifact failed for PDF: {load_result}")
   if load_result["kind"] != "inline_data":
     _fail(f"PDF artifact loaded with wrong kind: {load_result}")
-  if load_result["mime_type"] != "application/pdf":
-    _fail(f"PDF artifact loaded with wrong MIME type: {load_result}")
+  if load_result.get("resolved_filename") != saved_filename:
+    _fail(f"PDF load did not report the saved artifact name: {load_result}")
   if load_result.get("scope") != "user":
     _fail(f"PDF load did not report user scope: {load_result}")
-  pdf_bytes = base64.b64decode(str(load_result["base64_data"]))
-  if not pdf_bytes.startswith(b"%PDF"):
-    _fail("PDF artifact bytes did not start with %PDF")
+  if load_result["mime_type"] != "application/pdf":
+    _fail(f"PDF artifact loaded with wrong MIME type: {load_result}")
   if load_result.get("companion_text_filename") != companion_filename:
     _fail("PDF load did not include the companion text filename")
   if load_result.get("companion_text") != itinerary:
     _fail("PDF load did not include the companion text")
-  print("oracle tools pdf artifact smoke passed")
-  return pdf_filename
+  print("oracle travel agent PDF artifact validation passed")
+  return saved_filename
 
 
 async def _list_artifacts_smoke(
-    tool_context: SmokeToolContext, artifact_base: str
+    tool_context: SmokeToolContext, expected_names: list[str]
 ) -> None:
   result = await list_saved_artifacts(tool_context=tool_context)
   if result["status"] != "listed":
@@ -483,23 +472,23 @@ async def _list_artifacts_smoke(
   artifact_names = result.get("artifact_names")
   if not isinstance(artifact_names, list):
     _fail(f"list_saved_artifacts did not return a list: {result}")
-  for expected in (f"{artifact_base}.txt", f"{artifact_base}.pdf"):
+  for expected in expected_names:
     if expected not in artifact_names:
       _fail(f"list_saved_artifacts did not include {expected}: {result}")
-  print("oracle tools artifact list smoke passed")
+  print("oracle travel agent artifact list validation passed")
 
 
 async def _pdf_export_smoke(
-    tool_context: SmokeToolContext, smoke_id: str, filename: str
+    tool_context: SmokeToolContext, smoke_id: str, saved_filename: str
 ) -> None:
   export_result = await export_artifact_to_file(
-      filename=filename,
-      output_filename=f"oracle-tools-itinerary-{smoke_id}.pdf",
+      filename=saved_filename,
+      output_filename=f"oracle-travel-itinerary-{smoke_id}.pdf",
       tool_context=tool_context,
   )
   if export_result["status"] != "exported":
     _fail(f"export_artifact_to_file failed for PDF: {export_result}")
-  if export_result.get("source_filename") != filename:
+  if export_result.get("resolved_filename") != saved_filename:
     _fail(f"export_artifact_to_file did not report source filename: {export_result}")
   if export_result.get("scope") != "user":
     _fail(f"export_artifact_to_file did not report user scope: {export_result}")
@@ -508,28 +497,36 @@ async def _pdf_export_smoke(
     _fail(f"PDF export path does not exist: {output_path}")
   if not output_path.read_bytes().startswith(b"%PDF"):
     _fail("exported PDF bytes did not start with %PDF")
-  print("oracle tools pdf export smoke passed")
+  print("oracle travel agent PDF export validation passed")
 
 
 async def main() -> None:
   _load_agent_and_services()
-  smoke_id = f"adk-oracledb-tools-agent-smoke-{uuid.uuid4().hex}"
-  artifact_base = f"user:demo-trip-{smoke_id}"
+  smoke_id = f"adk-oracledb-travel-agent-smoke-{uuid.uuid4().hex}"
   session_service, tool_context = await _make_context(smoke_id)
   try:
     await _memory_tool_smoke(tool_context, smoke_id)
     itinerary = await _planning_smoke(tool_context, smoke_id)
-    await _text_artifact_smoke(tool_context, smoke_id, artifact_base, itinerary)
-    pdf_filename = await _pdf_artifact_smoke(tool_context, artifact_base, itinerary)
-    await _list_artifacts_smoke(tool_context, artifact_base)
-    await _pdf_export_smoke(tool_context, smoke_id, pdf_filename)
+    text_filename = await _text_artifact_smoke(tool_context, smoke_id, itinerary)
+    saved_pdf_filename = await _pdf_artifact_smoke(
+        tool_context, smoke_id, itinerary
+    )
+    await _list_artifacts_smoke(
+        tool_context,
+        [text_filename, saved_pdf_filename],
+    )
+    await _pdf_export_smoke(
+        tool_context,
+        smoke_id,
+        saved_pdf_filename,
+    )
   finally:
     await session_service.delete_session(
         app_name=APP_NAME,
         user_id=USER_ID,
         session_id=tool_context.session_id,
     )
-  print("oracle tools agent smoke completed successfully")
+  print("oracle travel agent validation completed successfully")
 
 
 if __name__ == "__main__":
