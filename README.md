@@ -34,6 +34,10 @@ into one backend:
 - A single Oracle schema can back multiple ADK apps through configurable table
   prefixes.
 
+OracleArtifactService stores artifact payloads in Oracle BLOB columns.
+Practical artifact size depends on the Oracle Database edition, storage
+configuration, and application limits.
+
 ## How it operates
 
 ```text
@@ -139,6 +143,10 @@ ORACLE_SESSION_TABLE_PREFIX=ADK
 ORACLE_MEMORY_TABLE_PREFIX=ADK_MEMORY
 ORACLE_ARTIFACT_TABLE_PREFIX=ADK_ART
 ```
+
+Auto-created session and artifact tables use Oracle native JSON columns. Use an
+Oracle Database release that supports the native JSON data type; Oracle Database
+Free is recommended for local development.
 
 Shell-exported variables take precedence over values loaded from `.env`.
 

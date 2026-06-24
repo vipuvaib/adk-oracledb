@@ -23,6 +23,9 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+examples = [
+    "reportlab>=4.2.0",
+]
 memory = [
     "oracleagentmemory==26.4.0",
 ]
