@@ -166,6 +166,20 @@ def _inline_part_metadata_json(
   }
 
 
+def _text_part_metadata_json(
+    *, payload: bytes, mime_type: str | None
+) -> dict[str, Any]:
+  return {
+      "payloadKind": "TEXT",
+      "text": {
+          "mimeType": mime_type or "text/plain",
+          "size": len(payload),
+          "encoding": "utf-8",
+          "storage": "payload_blob",
+      },
+  }
+
+
 def _part_to_payload(
     part: types.Part,
 ) -> tuple[str, bytes, str | None, dict[str, Any]]:
@@ -175,7 +189,7 @@ def _part_to_payload(
         "TEXT",
         payload,
         "text/plain",
-        part.model_dump(mode="json", by_alias=True, exclude_none=True),
+        _text_part_metadata_json(payload=payload, mime_type="text/plain"),
     )
 
   if part.inline_data is not None:

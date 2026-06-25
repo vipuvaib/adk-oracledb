@@ -34,9 +34,10 @@ into one backend:
 - A single Oracle schema can back multiple ADK apps through configurable table
   prefixes.
 
-OracleArtifactService stores artifact payloads in Oracle BLOB columns.
-Practical artifact size depends on the Oracle Database edition, storage
-configuration, and application limits.
+OracleArtifactService stores artifact payload content in Oracle BLOB columns
+and keeps artifact JSON metadata separate from the payload. Practical artifact
+size depends on the Oracle Database edition, storage configuration, and
+application limits.
 
 ## How it operates
 
