@@ -148,10 +148,10 @@ Try prompts like:
 ```text
 Remember that I prefer 8-day mid-budget trekking and cultural trips.
 Plan an 8-day mid-budget trip to Nepal using my preferences with morning/afternoon/evening details.
-Save that itinerary as user:nepal_itinerary.
-Generate and save that itinerary as PDF named user:nepal_itinerary.pdf.
+Save the full itinerary above, without summarizing or shortening it, as user:security_review_nepal.
+Generate and save a PDF from the full saved itinerary, without summarizing or shortening it, named user:security_review_nepal.pdf.
 List my saved artifacts.
-Load user:nepal_itinerary.pdf.
-Export user:nepal_itinerary.pdf to nepal_itinerary.pdf.
-Load user:nepal_itinerary.txt.
+Load user:security_review_nepal.pdf.
+Export user:security_review_nepal.pdf to security_review_nepal.pdf.
+Load user:security_review_nepal.txt.
 ```
