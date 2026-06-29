@@ -4,9 +4,8 @@
 -- changed, generated DDL should replace the ADK_ prefix in table, constraint,
 -- and index names with the configured prefix.
 --
--- This schema uses Oracle's native JSON type. For older Oracle versions that do not
--- support JSON columns, replace each JSON column with:
---   CLOB CHECK (<column_name> IS JSON)
+-- Auto-created session tables use Oracle native JSON columns.
+-- Use an Oracle Database release that supports the native JSON data type.
 
 CREATE TABLE ADK_SESSIONS (
   app_name VARCHAR2(255 CHAR) NOT NULL,

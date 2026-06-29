@@ -153,16 +153,31 @@ def _ensure_part(artifact: types.Part | dict[str, Any]) -> types.Part:
   raise ValueError("artifact must be a google.genai.types.Part or dict")
 
 
-def _part_json(part: types.Part, payload: bytes, mime_type: str | None) -> dict[str, Any]:
-  try:
-    return part.model_dump(mode="json", by_alias=True, exclude_none=True)
-  except (TypeError, ValueError):
-    return {
-        "inlineData": {
-            "mimeType": mime_type,
-            "size": len(payload),
-        }
-    }
+def _inline_part_metadata_json(
+    *, payload: bytes, mime_type: str | None
+) -> dict[str, Any]:
+  return {
+      "payloadKind": "INLINE_DATA",
+      "inlineData": {
+          "mimeType": mime_type,
+          "size": len(payload),
+          "storage": "payload_blob",
+      },
+  }
+
+
+def _text_part_metadata_json(
+    *, payload: bytes, mime_type: str | None
+) -> dict[str, Any]:
+  return {
+      "payloadKind": "TEXT",
+      "text": {
+          "mimeType": mime_type or "text/plain",
+          "size": len(payload),
+          "encoding": "utf-8",
+          "storage": "payload_blob",
+      },
+  }
 
 
 def _part_to_payload(
@@ -174,19 +189,17 @@ def _part_to_payload(
         "TEXT",
         payload,
         "text/plain",
-        part.model_dump(mode="json", by_alias=True, exclude_none=True),
+        _text_part_metadata_json(payload=payload, mime_type="text/plain"),
     )
 
   if part.inline_data is not None:
-    payload = part.inline_data.data or b""
-    if isinstance(payload, bytearray):
-      payload = bytes(payload)
+    payload = _to_bytes(part.inline_data.data or b"")
     mime_type = part.inline_data.mime_type
     return (
         "INLINE_DATA",
         payload,
         mime_type,
-        _part_json(part, payload, mime_type),
+        _inline_part_metadata_json(payload=payload, mime_type=mime_type),
     )
 
   raise ValueError(

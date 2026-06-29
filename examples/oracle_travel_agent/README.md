@@ -36,6 +36,11 @@ text is saved as a companion `.txt` artifact so the agent can retrieve and
 discuss the itinerary later. Exported files are ignored by git through
 `exports/.gitignore`.
 
+The Oracle integration stores generated PDF bytes as ADK artifacts. PDF
+generation itself is not the integration feature, so this example uses
+ReportLab for PDF creation. ReportLab is an optional example dependency, not a
+core runtime requirement.
+
 ## Required environment
 
 The example loads a repo-root `.env` file when present. Use the canonical names
@@ -75,11 +80,24 @@ export ORACLE_ARTIFACT_TABLE_PREFIX=ADK_TRAVEL_AGENT_ART
 ## Run the validation flow
 
 Install the memory extra first because this validation exercises
-`OracleMemoryService`:
+`OracleMemoryService`. Install the examples extra too if you want the PDF helper
+dependency from the package metadata:
 
 ```bash
-pip install -e ".[memory]"
+pip install -e ".[memory,examples]"
 .venv/bin/python examples/oracle_travel_agent/run_smoke.py
+```
+
+For an installed package, ReportLab can be installed with:
+
+```bash
+pip install "adk-oracledb[examples]"
+```
+
+or directly with:
+
+```bash
+pip install reportlab
 ```
 
 The validation flow loads the agent, registers `oracle://` services through this
@@ -130,10 +148,10 @@ Try prompts like:
 ```text
 Remember that I prefer 8-day mid-budget trekking and cultural trips.
 Plan an 8-day mid-budget trip to Nepal using my preferences with morning/afternoon/evening details.
-Save that itinerary as user:nepal_itinerary.
-Generate and save that itinerary as PDF named user:nepal_itinerary.pdf.
+Save the full itinerary above, without summarizing or shortening it, as user:security_review_nepal.
+Generate and save a PDF from the full saved itinerary, without summarizing or shortening it, named user:security_review_nepal.pdf.
 List my saved artifacts.
-Load user:nepal_itinerary.pdf.
-Export user:nepal_itinerary.pdf to nepal_itinerary.pdf.
-Load user:nepal_itinerary.txt.
+Load user:security_review_nepal.pdf.
+Export user:security_review_nepal.pdf to security_review_nepal.pdf.
+Load user:security_review_nepal.txt.
 ```

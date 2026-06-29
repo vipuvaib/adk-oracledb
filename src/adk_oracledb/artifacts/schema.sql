@@ -1,3 +1,7 @@
+-- Auto-created artifact tables use Oracle native JSON columns for ADK Part
+-- metadata and custom artifact metadata.
+-- Use an Oracle Database release that supports the native JSON data type.
+
 CREATE TABLE ADK_ARTIFACTS (
   app_name VARCHAR2(255 CHAR) NOT NULL,
   user_id VARCHAR2(255 CHAR) NOT NULL,

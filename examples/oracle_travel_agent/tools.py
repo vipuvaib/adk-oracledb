@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import html
+import io
 from pathlib import Path
 from typing import Any
 import uuid
@@ -11,6 +13,7 @@ from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
 _EXPORTS_DIR = Path(__file__).resolve().parent / "exports"
+MAX_PDF_SOURCE_CHARS = 80_000
 
 
 def _require_text(value: str, name: str) -> str:
@@ -110,66 +113,84 @@ def _blob_data_to_bytes(data: bytes | str | None) -> bytes:
     return data.encode("utf-8")
 
 
-def _pdf_escape(text: str) -> str:
-  return (
-      text.replace("\\", "\\\\")
-      .replace("(", "\\(")
-      .replace(")", "\\)")
-      .replace("\r", " ")
-  )
+def _pdf_error_result(
+    *,
+    filename: str,
+    companion_filename: str,
+    message: str,
+) -> dict[str, object]:
+  return {
+      "status": "error",
+      "filename": filename,
+      "requested_filename": filename,
+      "resolved_filename": filename,
+      "scope": _artifact_scope_from_filename(filename),
+      "pdf_filename": filename,
+      "companion_text_filename": companion_filename,
+      "mime_type": "application/pdf",
+      "size": 0,
+      "message": message,
+  }
 
 
-def _simple_pdf_bytes(title: str, body: str) -> bytes:
+def _pdf_paragraph_text(text: str) -> str:
+  return html.escape(text.replace("\t", "    "), quote=False)
+
+
+def _reportlab_pdf_bytes(title: str, body: str) -> bytes:
   title = _require_text(title, "title")
   body = _require_text(body, "body")
-  lines = [title, ""] + body.splitlines()
-  content_lines = ["BT", "/F1 18 Tf", "72 750 Td"]
-  for index, line in enumerate(lines[:34]):
-    if index == 1:
-      content_lines.extend(["/F1 11 Tf", "0 -28 Td"])
-      continue
-    if index > 0:
-      content_lines.append("0 -16 Td")
-    content_lines.append(f"({_pdf_escape(line[:96])}) Tj")
-  content_lines.append("ET")
-  stream = "\n".join(content_lines).encode("latin-1", errors="replace")
+  source_chars = len(title) + len(body)
+  if source_chars > MAX_PDF_SOURCE_CHARS:
+    raise ValueError(
+        "PDF source text is too large for this demo helper "
+        f"({source_chars} characters; limit {MAX_PDF_SOURCE_CHARS}). "
+        "Save the itinerary as text or shorten it before generating a PDF."
+    )
 
-  objects = [
-      b"<< /Type /Catalog /Pages 2 0 R >>",
-      b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-      (
-          b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-          b"/Resources << /Font << /F1 4 0 R >> >> "
-          b"/Contents 5 0 R >>"
-      ),
-      b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-      (
-          f"<< /Length {len(stream)} >>\n".encode("ascii")
-          + b"stream\n"
-          + stream
-          + b"\nendstream"
-      ),
-  ]
+  try:
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import Paragraph
+    from reportlab.platypus import SimpleDocTemplate
+    from reportlab.platypus import Spacer
+  except ImportError as e:
+    raise RuntimeError(
+        "PDF generation requires ReportLab. Install it with "
+        'pip install "adk-oracledb[examples]" or pip install reportlab.'
+    ) from e
 
-  pdf = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
-  offsets = [0]
-  for index, obj in enumerate(objects, start=1):
-    offsets.append(len(pdf))
-    pdf.extend(f"{index} 0 obj\n".encode("ascii"))
-    pdf.extend(obj)
-    pdf.extend(b"\nendobj\n")
-  xref_offset = len(pdf)
-  pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
-  pdf.extend(b"0000000000 65535 f \n")
-  for offset in offsets[1:]:
-    pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
-  pdf.extend(
-      (
-          f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-          f"startxref\n{xref_offset}\n%%EOF\n"
-      ).encode("ascii")
+  buffer = io.BytesIO()
+  doc = SimpleDocTemplate(
+      buffer,
+      pagesize=LETTER,
+      rightMargin=54,
+      leftMargin=54,
+      topMargin=54,
+      bottomMargin=54,
   )
-  return bytes(pdf)
+  styles = getSampleStyleSheet()
+  title_style = ParagraphStyle(
+      "ItineraryTitle",
+      parent=styles["Title"],
+      spaceAfter=14,
+  )
+  body_style = ParagraphStyle(
+      "ItineraryBody",
+      parent=styles["BodyText"],
+      leading=14,
+      spaceAfter=6,
+  )
+  story = [Paragraph(_pdf_paragraph_text(title), title_style), Spacer(1, 8)]
+  for line in body.splitlines():
+    if line.strip():
+      story.append(Paragraph(_pdf_paragraph_text(line), body_style))
+    else:
+      story.append(Spacer(1, 8))
+
+  doc.build(story)
+  return buffer.getvalue()
 
 
 async def remember_travel_preference(
@@ -449,7 +470,14 @@ async def generate_and_save_itinerary_pdf(
   filename = _ensure_pdf_filename(filename)
   companion_filename = _companion_text_filename_for_pdf(filename)
   itinerary = _require_text_preserve(itinerary, "itinerary")
-  pdf_bytes = _simple_pdf_bytes(title=title, body=itinerary)
+  try:
+    pdf_bytes = _reportlab_pdf_bytes(title=title, body=itinerary)
+  except (RuntimeError, ValueError) as e:
+    return _pdf_error_result(
+        filename=filename,
+        companion_filename=companion_filename,
+        message=str(e),
+    )
   pdf_version = await tool_context.save_artifact(
       filename,
       types.Part(
