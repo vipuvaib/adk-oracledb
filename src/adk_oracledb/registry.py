@@ -165,9 +165,21 @@ def _pool_kwargs(parsed: dict[str, Any]) -> dict[str, int]:
   return kwargs
 
 
+def _reject_pool_options_for_service(
+    query: dict[str, list[str]], service_name: str
+) -> None:
+  for name in ("pool_min", "pool_max"):
+    if _query_param(query, name) is not None:
+      raise ValueError(
+          f"{name} is only supported for oracle:// memory services; "
+          f"{service_name} services use per-operation Oracle connections"
+      )
+
+
 def _session_config_from_uri(uri: str) -> OracleSessionServiceConfig:
   parsed = _parse_oracle_uri(uri)
   query = parsed["query"]
+  _reject_pool_options_for_service(query, "session")
   table_prefix = _query_param_or_env(
       query,
       "table_prefix",
@@ -180,13 +192,13 @@ def _session_config_from_uri(uri: str) -> OracleSessionServiceConfig:
       dsn=parsed["dsn"],
       table_prefix=table_prefix or "ADK",
       auto_create_tables=_parse_bool(query, "auto_create_tables", True),
-      **_pool_kwargs(parsed),
   )
 
 
 def _artifact_config_from_uri(uri: str) -> OracleArtifactServiceConfig:
   parsed = _parse_oracle_uri(uri)
   query = parsed["query"]
+  _reject_pool_options_for_service(query, "artifact")
   table_prefix = (
       _query_param(query, "artifact_table_prefix")
       or _query_param(query, "table_prefix")
@@ -199,7 +211,6 @@ def _artifact_config_from_uri(uri: str) -> OracleArtifactServiceConfig:
       dsn=parsed["dsn"],
       table_prefix=table_prefix,
       auto_create_tables=_parse_bool(query, "auto_create_tables", True),
-      **_pool_kwargs(parsed),
   )
 
 

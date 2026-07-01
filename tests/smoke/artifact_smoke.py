@@ -24,6 +24,7 @@ from oracle_env import require_env
 
 from adk_oracledb.artifacts import OracleArtifactService
 from adk_oracledb.artifacts import OracleArtifactServiceConfig
+from adk_oracledb.artifacts import service as artifact_service_module
 from adk_oracledb.registry import register_oracle_services
 from google.adk.cli.service_registry import get_service_registry
 
@@ -72,7 +73,30 @@ def _assert_text(part: types.Part | None, expected: str, label: str) -> None:
     _fail(f"{label} text mismatch: expected {expected!r}, got {part.text!r}")
 
 
+def _artifact_scope_helper_smoke() -> None:
+  assert artifact_service_module._artifact_scope_type_and_id(
+      filename="user:profile.txt",
+      session_id=None,
+  ) == ("USER", "__USER__")
+  assert artifact_service_module._artifact_scope_type_and_id(
+      filename="report.txt",
+      session_id="session-1",
+  ) == ("SESSION", "session-1")
+  for missing_session_id in (None, " "):
+    try:
+      artifact_service_module._artifact_scope_type_and_id(
+          filename="report.txt",
+          session_id=missing_session_id,
+      )
+    except ValueError as exc:
+      if "session_id is required for session-scoped artifacts" not in str(exc):
+        raise
+    else:
+      _fail("plain artifact filename did not require a session_id")
+
+
 async def main() -> None:
+  _artifact_scope_helper_smoke()
   _registry_construction_smoke()
   service = OracleArtifactService(_config_from_env())
   smoke_id = uuid.uuid4().hex
@@ -166,12 +190,29 @@ async def main() -> None:
   print(f"text artifact version metadata count: {len(all_metadata)}")
   assert [item.version for item in all_metadata] == [0, 1]
 
+  missing_session_filename = f"plain-missing-session-{smoke_id}.txt"
+  for missing_session_id in (None, " "):
+    try:
+      await service.save_artifact(
+          app_name=APP_NAME,
+          user_id=USER_ID,
+          session_id=missing_session_id,
+          filename=missing_session_filename,
+          artifact=types.Part.from_text(text="should not save"),
+      )
+    except ValueError as exc:
+      if "session_id is required for session-scoped artifacts" not in str(exc):
+        raise
+    else:
+      _fail("plain artifact save without session_id did not fail")
+  print("plain artifact missing-session validation passed")
+
   user_filename = f"user:user-artifact-{smoke_id}.txt"
   user_text = f"user scoped artifact {smoke_id}"
   user_version = await service.save_artifact(
       app_name=APP_NAME,
       user_id=USER_ID,
-      session_id=session_id,
+      session_id=None,
       filename=user_filename,
       artifact=types.Part.from_text(text=user_text),
       custom_metadata={

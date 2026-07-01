@@ -110,7 +110,13 @@ def _artifact_scope_type_and_id(
 ) -> tuple[str, str]:
   if _is_user_scoped_filename(filename):
     return _ARTIFACT_USER_SCOPE, _USER_SCOPE_ID
-  return _scope_type_and_id(session_id)
+
+  if session_id is None:
+    raise ValueError("session_id is required for session-scoped artifacts")
+  session_id = session_id.strip()
+  if not session_id:
+    raise ValueError("session_id is required for session-scoped artifacts")
+  return _ARTIFACT_SESSION_SCOPE, session_id
 
 
 def _validate_non_empty(value: str, name: str) -> str:
@@ -322,7 +328,7 @@ class OracleArtifactServiceConfig(BaseModel):
 
 
 class OracleArtifactService(BaseArtifactService):
-  """Skeleton ADK artifact service backed by Oracle Database."""
+  """ADK artifact service backed by Oracle Database."""
 
   def __init__(self, config: OracleArtifactServiceConfig):
     self._config = config

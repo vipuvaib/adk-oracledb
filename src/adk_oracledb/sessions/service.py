@@ -151,7 +151,7 @@ class OracleSessionServiceConfig(BaseModel):
 
 
 class OracleSessionService(BaseSessionService):
-  """Minimal Oracle Database session service skeleton."""
+  """ADK session service backed by Oracle Database."""
 
   def __init__(self, config: OracleSessionServiceConfig):
     self._config = config

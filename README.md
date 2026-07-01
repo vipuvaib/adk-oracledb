@@ -178,6 +178,10 @@ The memory service also accepts provider settings in the URI, including
 `embedder_input_type`, `embedder_query_input_type`, and
 `embedder_document_input_type`.
 
+`pool_min` and `pool_max` apply to `OracleMemoryService`.
+`OracleSessionService` and `OracleArtifactService` currently use
+per-operation Oracle connections.
+
 ## Examples
 
 ### Oracle runtime services agent
