@@ -37,7 +37,9 @@ into one backend:
 OracleArtifactService stores artifact payload content in Oracle BLOB columns
 and keeps artifact JSON metadata separate from the payload. Practical artifact
 size depends on the Oracle Database edition, storage configuration, and
-application limits.
+application limits. `file_data` artifact parts are preserved as URI references;
+the artifact service does not fetch external file URIs or guarantee external
+URI durability.
 
 ## How it operates
 
@@ -182,6 +184,11 @@ The memory service also accepts provider settings in the URI, including
 `OracleSessionService` and `OracleArtifactService` currently use
 per-operation Oracle connections.
 
+`OracleSessionService` follows ADK state scoping: ordinary state keys are
+session scoped, `user:` keys are shared across sessions for the same app/user,
+`app:` keys are shared across users and sessions for the same app, and `temp:`
+keys are not persisted.
+
 ## Examples
 
 ### Oracle runtime services agent
@@ -254,6 +261,10 @@ Use user-scoped artifacts for durable files such as saved itineraries, reports,
 and generated PDFs that should be available across sessions. The services
 preserve ADK's filename-based scope semantics: plain filenames stay session
 scoped, and `user:` filenames are user scoped.
+
+Text and `inline_data` payloads are stored in Oracle BLOB-backed artifact
+storage. `file_data` parts are stored as preserved URI references; Oracle does
+not fetch or copy the referenced external file.
 
 ## Validation scripts
 

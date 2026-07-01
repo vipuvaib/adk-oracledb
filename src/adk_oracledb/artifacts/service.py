@@ -28,6 +28,8 @@ _ARTIFACT_SESSION_SCOPE = "SESSION"
 _USER_SCOPE_ID = "__USER__"
 _USER_NAMESPACE_PREFIX = "user:"
 _ORACLE_ALREADY_EXISTS_CODE = 955
+_ORACLE_MISSING_CONSTRAINT_CODE = 2443
+_ORACLE_NAME_ALREADY_USED_CODE = 2264
 _ORACLE_UNIQUE_CONSTRAINT_CODE = 1
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -83,6 +85,14 @@ def _is_oracle_error_code(error: BaseException, code: int) -> bool:
 
 def _is_oracle_already_exists_error(error: BaseException) -> bool:
   return _is_oracle_error_code(error, _ORACLE_ALREADY_EXISTS_CODE)
+
+
+def _is_oracle_missing_constraint_error(error: BaseException) -> bool:
+  return _is_oracle_error_code(error, _ORACLE_MISSING_CONSTRAINT_CODE)
+
+
+def _is_oracle_name_already_used_error(error: BaseException) -> bool:
+  return _is_oracle_error_code(error, _ORACLE_NAME_ALREADY_USED_CODE)
 
 
 def _is_oracle_unique_constraint_error(error: BaseException) -> bool:
@@ -186,6 +196,24 @@ def _text_part_metadata_json(
   }
 
 
+def _file_data_part_metadata_json(
+    *,
+    payload: bytes,
+    file_uri: str,
+    mime_type: str | None,
+) -> dict[str, Any]:
+  return {
+      "payloadKind": "FILE_DATA",
+      "fileData": {
+          "fileUri": file_uri,
+          "mimeType": mime_type,
+          "size": len(payload),
+          "storage": "payload_blob",
+          "representation": "file_uri",
+      },
+  }
+
+
 def _part_to_payload(
     part: types.Part,
 ) -> tuple[str, bytes, str | None, dict[str, Any]]:
@@ -208,8 +236,25 @@ def _part_to_payload(
         _inline_part_metadata_json(payload=payload, mime_type=mime_type),
     )
 
+  if part.file_data is not None:
+    file_uri = part.file_data.file_uri
+    if not file_uri:
+      raise ValueError("file_data.file_uri is required for file_data artifacts.")
+    payload = file_uri.encode("utf-8")
+    mime_type = part.file_data.mime_type
+    return (
+        "FILE_DATA",
+        payload,
+        mime_type,
+        _file_data_part_metadata_json(
+            payload=payload,
+            file_uri=file_uri,
+            mime_type=mime_type,
+        ),
+    )
+
   raise ValueError(
-      "OracleArtifactService currently supports text and inline_data "
+      "OracleArtifactService currently supports text, inline_data, and file_data "
       "artifacts only."
   )
 
@@ -224,6 +269,13 @@ def _payload_to_part(
     return types.Part.from_text(text=payload.decode("utf-8"))
   if payload_kind == "INLINE_DATA":
     return types.Part(inline_data=types.Blob(data=payload, mime_type=mime_type))
+  if payload_kind == "FILE_DATA":
+    return types.Part(
+        file_data=types.FileData(
+            file_uri=payload.decode("utf-8"),
+            mime_type=mime_type,
+        )
+    )
   raise ValueError(f"Unsupported artifact payload kind: {payload_kind}")
 
 
@@ -355,6 +407,10 @@ class OracleArtifactService(BaseArtifactService):
             await _call(cursor.execute, statement)
           except Exception as e:
             if _is_oracle_already_exists_error(e):
+              continue
+            if _is_oracle_missing_constraint_error(e):
+              continue
+            if _is_oracle_name_already_used_error(e):
               continue
             raise
         await _call(connection.commit)

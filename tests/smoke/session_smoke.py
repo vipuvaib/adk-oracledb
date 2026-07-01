@@ -72,6 +72,20 @@ def _new_event() -> Event:
   )
 
 
+def _state_delta_event(state_delta: dict[str, object]) -> Event:
+  return Event(
+      id=f"smoke-state-event-{uuid.uuid4().hex}",
+      invocation_id=f"smoke-state-invocation-{uuid.uuid4().hex}",
+      author="user",
+      timestamp=time.time(),
+      content=types.Content(
+          role="user",
+          parts=[types.Part.from_text(text="Update scoped state.")],
+      ),
+      actions=EventActions(state_delta=state_delta),
+  )
+
+
 def _registry_construction_smoke() -> None:
   register_oracle_services()
   registry = get_service_registry()
@@ -83,12 +97,64 @@ def _registry_construction_smoke() -> None:
   print("session registry construction smoke passed")
 
 
-async def _delete_if_exists(
-    service: OracleSessionService, session_id: str | None
+def _config_validation_smoke() -> None:
+  generated_user = f"test-user-{uuid.uuid4().hex}"
+  generated_value = f"test-db-value-{uuid.uuid4().hex}"
+  default_config = OracleSessionServiceConfig(
+      user=generated_user,
+      password=generated_value,
+      dsn="localhost:1521/FREEPDB1",
+  )
+  assert default_config.pool_min == 1
+  assert default_config.pool_max == 4
+
+  valid_config = OracleSessionServiceConfig(
+      user=generated_user,
+      password=generated_value,
+      dsn="localhost:1521/FREEPDB1",
+      pool_min=2,
+      pool_max=5,
+  )
+  assert valid_config.pool_min == 2
+  assert valid_config.pool_max == 5
+
+  try:
+    OracleSessionServiceConfig(
+        user=generated_user,
+        password=generated_value,
+        dsn="localhost:1521/FREEPDB1",
+        pool_min=5,
+        pool_max=1,
+    )
+  except ValueError as exc:
+    if "pool_max" not in str(exc):
+      raise
+  else:
+    raise SystemExit("OracleSessionServiceConfig accepted pool_max < pool_min")
+  print("session config validation smoke passed")
+
+
+async def _delete_session_if_exists(
+    service: OracleSessionService,
+    *,
+    app_name: str,
+    user_id: str,
+    session_id: str | None,
 ) -> None:
   if session_id is None:
     return
   await service.delete_session(
+      app_name=app_name,
+      user_id=user_id,
+      session_id=session_id,
+  )
+
+
+async def _delete_if_exists(
+    service: OracleSessionService, session_id: str | None
+) -> None:
+  await _delete_session_if_exists(
+      service,
       app_name=APP_NAME,
       user_id=USER_ID,
       session_id=session_id,
@@ -192,11 +258,200 @@ async def _append_event_smoke(service: OracleSessionService) -> None:
     await _delete_if_exists(service, session_id)
 
 
+def _assert_absent(state: dict[str, object], key: str, context: str) -> None:
+  if key in state:
+    raise SystemExit(f"{context} unexpectedly contained {key!r}: {state}")
+
+
+def _assert_state_value(
+    state: dict[str, object],
+    key: str,
+    expected: object,
+    context: str,
+) -> None:
+  if state.get(key) != expected:
+    raise SystemExit(
+        f"{context} expected {key!r}={expected!r}, got {state.get(key)!r}"
+    )
+
+
+async def _state_scope_smoke(service: OracleSessionService) -> None:
+  smoke_id = uuid.uuid4().hex
+  app_name = f"{APP_NAME}_state_{smoke_id}"
+  other_app_name = f"{APP_NAME}_other_state_{smoke_id}"
+  user_id = f"{USER_ID}_state_{smoke_id}"
+  other_user_id = f"{USER_ID}_other_state_{smoke_id}"
+  cleanup: list[tuple[str, str, str]] = []
+
+  async def create(
+      *,
+      app: str,
+      user: str,
+      state: dict[str, object] | None = None,
+  ):
+    session = await service.create_session(
+        app_name=app,
+        user_id=user,
+        state=state,
+    )
+    cleanup.append((app, user, session.id))
+    return session
+
+  try:
+    session_a = await create(
+        app=app_name,
+        user=user_id,
+        state={
+            "trip": "Goa",
+            "user:preference": "aisle",
+            "app:policy": "standard",
+            "temp:scratch": "not-persisted",
+        },
+    )
+    _assert_state_value(session_a.state, "trip", "Goa", "session A create")
+    _assert_state_value(
+        session_a.state, "user:preference", "aisle", "session A create"
+    )
+    _assert_state_value(
+        session_a.state, "app:policy", "standard", "session A create"
+    )
+    _assert_absent(session_a.state, "temp:scratch", "session A create")
+
+    loaded_a = await service.get_session(
+        app_name=app_name,
+        user_id=user_id,
+        session_id=session_a.id,
+    )
+    if loaded_a is None:
+      raise SystemExit("state scope smoke could not load session A")
+    _assert_state_value(loaded_a.state, "trip", "Goa", "session A load")
+    _assert_state_value(
+        loaded_a.state, "user:preference", "aisle", "session A load"
+    )
+    _assert_state_value(
+        loaded_a.state, "app:policy", "standard", "session A load"
+    )
+    _assert_absent(loaded_a.state, "temp:scratch", "session A load")
+
+    session_b = await create(app=app_name, user=user_id)
+    _assert_state_value(
+        session_b.state, "user:preference", "aisle", "session B create"
+    )
+    _assert_state_value(
+        session_b.state, "app:policy", "standard", "session B create"
+    )
+    _assert_absent(session_b.state, "trip", "session B create")
+    _assert_absent(session_b.state, "temp:scratch", "session B create")
+
+    session_c = await create(app=app_name, user=other_user_id)
+    _assert_state_value(
+        session_c.state, "app:policy", "standard", "session C create"
+    )
+    _assert_absent(session_c.state, "user:preference", "session C create")
+
+    session_d = await create(app=other_app_name, user=user_id)
+    _assert_absent(session_d.state, "app:policy", "session D create")
+    _assert_absent(session_d.state, "user:preference", "session D create")
+
+    event = _state_delta_event(
+        {
+            "trip_note": "museum",
+            "user:preference": "window",
+            "app:policy": "updated",
+            "temp:scratch": "transient",
+        }
+    )
+    await service.append_event(session=session_b, event=event)
+    _assert_state_value(
+        session_b.state, "temp:scratch", "transient", "session B in-memory"
+    )
+
+    loaded_b = await service.get_session(
+        app_name=app_name,
+        user_id=user_id,
+        session_id=session_b.id,
+    )
+    if loaded_b is None:
+      raise SystemExit("state scope smoke could not load session B")
+    _assert_state_value(loaded_b.state, "trip_note", "museum", "session B load")
+    _assert_state_value(
+        loaded_b.state, "user:preference", "window", "session B load"
+    )
+    _assert_state_value(
+        loaded_b.state, "app:policy", "updated", "session B load"
+    )
+    _assert_absent(loaded_b.state, "temp:scratch", "session B load")
+    if not loaded_b.events:
+      raise SystemExit("session B loaded without appended event")
+    loaded_delta = loaded_b.events[-1].actions.state_delta or {}
+    _assert_absent(loaded_delta, "temp:scratch", "session B event delta")
+    _assert_state_value(
+        loaded_delta, "user:preference", "window", "session B event delta"
+    )
+    _assert_state_value(
+        loaded_delta, "app:policy", "updated", "session B event delta"
+    )
+    _assert_state_value(
+        loaded_delta, "trip_note", "museum", "session B event delta"
+    )
+
+    session_e = await create(app=app_name, user=user_id)
+    _assert_state_value(
+        session_e.state, "user:preference", "window", "session E create"
+    )
+    _assert_state_value(
+        session_e.state, "app:policy", "updated", "session E create"
+    )
+    _assert_absent(session_e.state, "trip_note", "session E create")
+
+    session_f = await create(app=app_name, user=other_user_id)
+    _assert_state_value(
+        session_f.state, "app:policy", "updated", "session F create"
+    )
+    _assert_absent(session_f.state, "user:preference", "session F create")
+
+    user_state = await service.get_user_state(app_name, user_id)
+    _assert_state_value(
+        user_state, "preference", "window", "direct user state"
+    )
+    _assert_absent(user_state, "user:preference", "direct user state")
+    app_state = await service.get_app_state(app_name)
+    _assert_state_value(app_state, "policy", "updated", "direct app state")
+    _assert_absent(app_state, "app:policy", "direct app state")
+
+    await service.delete_session(
+        app_name=app_name,
+        user_id=user_id,
+        session_id=session_b.id,
+    )
+    cleanup = [
+        item for item in cleanup if item != (app_name, user_id, session_b.id)
+    ]
+    session_g = await create(app=app_name, user=user_id)
+    _assert_state_value(
+        session_g.state, "user:preference", "window", "session G create"
+    )
+    _assert_state_value(
+        session_g.state, "app:policy", "updated", "session G create"
+    )
+    print("session scoped-state smoke passed")
+  finally:
+    for app_name_value, user_id_value, session_id in reversed(cleanup):
+      await _delete_session_if_exists(
+          service,
+          app_name=app_name_value,
+          user_id=user_id_value,
+          session_id=session_id,
+      )
+
+
 async def main() -> None:
+  _config_validation_smoke()
   _registry_construction_smoke()
   service = OracleSessionService(_config_from_env())
   await _lifecycle_smoke(service)
   await _append_event_smoke(service)
+  await _state_scope_smoke(service)
   print("session smoke completed successfully")
 
 
