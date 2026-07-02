@@ -103,6 +103,60 @@ def _artifact_uri() -> str:
   )
 
 
+def _pool_option_registry_smoke() -> None:
+  registry = get_service_registry()
+
+  session_uri = _oracle_uri(
+      query={
+          "table_prefix": os.environ.get(
+              "ORACLE_SESSION_TABLE_PREFIX", "ADK_REG_SMOKE"
+          ),
+          "pool_min": "1",
+      }
+  )
+  try:
+    registry.create_session_service(session_uri)
+  except ValueError as exc:
+    if "pool_min is only supported" not in str(exc):
+      raise
+  else:
+    _fail("session oracle:// URI accepted pool_min")
+
+  artifact_uri = _oracle_uri(
+      query={
+          "artifact_table_prefix": os.environ.get(
+              "ORACLE_ARTIFACT_TABLE_PREFIX", "ADK_REG_ART_SMOKE"
+          ),
+          "pool_max": "2",
+      }
+  )
+  try:
+    registry.create_artifact_service(artifact_uri)
+  except ValueError as exc:
+    if "pool_max is only supported" not in str(exc):
+      raise
+  else:
+    _fail("artifact oracle:// URI accepted pool_max")
+
+  require_env("EMBEDDING_MODEL")
+  memory_service = registry.create_memory_service(
+      _oracle_uri(
+          query={
+              "memory_table_prefix": os.environ.get(
+                  "ORACLE_MEMORY_TABLE_PREFIX", "ADK_REG_MEMORY_SMOKE"
+              ),
+              "pool_min": "2",
+              "pool_max": "3",
+          }
+      )
+  )
+  if getattr(memory_service, "_config").pool_min != 2:
+    _fail("memory oracle:// URI did not preserve pool_min")
+  if getattr(memory_service, "_config").pool_max != 3:
+    _fail("memory oracle:// URI did not preserve pool_max")
+  print("registry pool option smoke passed")
+
+
 def _memory_text(memory: MemoryEntry) -> str:
   if not memory.content or not memory.content.parts:
     return ""
@@ -259,6 +313,7 @@ async def _artifact_smoke(artifact_service: object, smoke_id: str) -> None:
 
 async def main() -> None:
   register_oracle_services()
+  _pool_option_registry_smoke()
   registry = get_service_registry()
 
   session_service = registry.create_session_service(_session_uri())

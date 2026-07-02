@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 from decimal import Decimal
 from datetime import datetime
 from datetime import timezone
@@ -28,6 +30,8 @@ _ARTIFACT_SESSION_SCOPE = "SESSION"
 _USER_SCOPE_ID = "__USER__"
 _USER_NAMESPACE_PREFIX = "user:"
 _ORACLE_ALREADY_EXISTS_CODE = 955
+_ORACLE_MISSING_CONSTRAINT_CODE = 2443
+_ORACLE_NAME_ALREADY_USED_CODE = 2264
 _ORACLE_UNIQUE_CONSTRAINT_CODE = 1
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -85,6 +89,14 @@ def _is_oracle_already_exists_error(error: BaseException) -> bool:
   return _is_oracle_error_code(error, _ORACLE_ALREADY_EXISTS_CODE)
 
 
+def _is_oracle_missing_constraint_error(error: BaseException) -> bool:
+  return _is_oracle_error_code(error, _ORACLE_MISSING_CONSTRAINT_CODE)
+
+
+def _is_oracle_name_already_used_error(error: BaseException) -> bool:
+  return _is_oracle_error_code(error, _ORACLE_NAME_ALREADY_USED_CODE)
+
+
 def _is_oracle_unique_constraint_error(error: BaseException) -> bool:
   return _is_oracle_error_code(error, _ORACLE_UNIQUE_CONSTRAINT_CODE)
 
@@ -110,7 +122,13 @@ def _artifact_scope_type_and_id(
 ) -> tuple[str, str]:
   if _is_user_scoped_filename(filename):
     return _ARTIFACT_USER_SCOPE, _USER_SCOPE_ID
-  return _scope_type_and_id(session_id)
+
+  if session_id is None:
+    raise ValueError("session_id is required for session-scoped artifacts")
+  session_id = session_id.strip()
+  if not session_id:
+    raise ValueError("session_id is required for session-scoped artifacts")
+  return _ARTIFACT_SESSION_SCOPE, session_id
 
 
 def _validate_non_empty(value: str, name: str) -> str:
@@ -153,6 +171,43 @@ def _ensure_part(artifact: types.Part | dict[str, Any]) -> types.Part:
   raise ValueError("artifact must be a google.genai.types.Part or dict")
 
 
+def _inline_data_to_bytes(data: Any) -> bytes:
+  if data is None:
+    raise ValueError("inline_data.data is required for inline_data artifacts.")
+  if isinstance(data, bytes):
+    return data
+  if isinstance(data, bytearray):
+    return bytes(data)
+  if isinstance(data, memoryview):
+    return data.tobytes()
+  if isinstance(data, str):
+    normalized_data = data.strip().replace("-", "+").replace("_", "/")
+    if not normalized_data:
+      return b""
+
+    if "=" not in normalized_data:
+      remainder = len(normalized_data) % 4
+      if remainder == 1:
+        raise ValueError(
+            "inline_data.data must be valid base64-encoded binary data."
+        )
+      normalized_data += "=" * (-len(normalized_data) % 4)
+    elif len(normalized_data) % 4 != 0:
+      raise ValueError(
+          "inline_data.data must be valid base64-encoded binary data."
+      )
+
+    try:
+      return base64.b64decode(normalized_data, validate=True)
+    except binascii.Error as e:
+      raise ValueError(
+          "inline_data.data must be valid base64-encoded binary data."
+      ) from e
+  raise ValueError(
+      "inline_data.data must be bytes or a base64-encoded string."
+  )
+
+
 def _inline_part_metadata_json(
     *, payload: bytes, mime_type: str | None
 ) -> dict[str, Any]:
@@ -180,6 +235,24 @@ def _text_part_metadata_json(
   }
 
 
+def _file_data_part_metadata_json(
+    *,
+    payload: bytes,
+    file_uri: str,
+    mime_type: str | None,
+) -> dict[str, Any]:
+  return {
+      "payloadKind": "FILE_DATA",
+      "fileData": {
+          "fileUri": file_uri,
+          "mimeType": mime_type,
+          "size": len(payload),
+          "storage": "payload_blob",
+          "representation": "file_uri",
+      },
+  }
+
+
 def _part_to_payload(
     part: types.Part,
 ) -> tuple[str, bytes, str | None, dict[str, Any]]:
@@ -193,7 +266,7 @@ def _part_to_payload(
     )
 
   if part.inline_data is not None:
-    payload = _to_bytes(part.inline_data.data or b"")
+    payload = _inline_data_to_bytes(part.inline_data.data)
     mime_type = part.inline_data.mime_type
     return (
         "INLINE_DATA",
@@ -202,8 +275,25 @@ def _part_to_payload(
         _inline_part_metadata_json(payload=payload, mime_type=mime_type),
     )
 
+  if part.file_data is not None:
+    file_uri = part.file_data.file_uri
+    if not file_uri:
+      raise ValueError("file_data.file_uri is required for file_data artifacts.")
+    payload = file_uri.encode("utf-8")
+    mime_type = part.file_data.mime_type
+    return (
+        "FILE_DATA",
+        payload,
+        mime_type,
+        _file_data_part_metadata_json(
+            payload=payload,
+            file_uri=file_uri,
+            mime_type=mime_type,
+        ),
+    )
+
   raise ValueError(
-      "OracleArtifactService currently supports text and inline_data "
+      "OracleArtifactService currently supports text, inline_data, and file_data "
       "artifacts only."
   )
 
@@ -218,6 +308,13 @@ def _payload_to_part(
     return types.Part.from_text(text=payload.decode("utf-8"))
   if payload_kind == "INLINE_DATA":
     return types.Part(inline_data=types.Blob(data=payload, mime_type=mime_type))
+  if payload_kind == "FILE_DATA":
+    return types.Part(
+        file_data=types.FileData(
+            file_uri=payload.decode("utf-8"),
+            mime_type=mime_type,
+        )
+    )
   raise ValueError(f"Unsupported artifact payload kind: {payload_kind}")
 
 
@@ -322,7 +419,7 @@ class OracleArtifactServiceConfig(BaseModel):
 
 
 class OracleArtifactService(BaseArtifactService):
-  """Skeleton ADK artifact service backed by Oracle Database."""
+  """ADK artifact service backed by Oracle Database."""
 
   def __init__(self, config: OracleArtifactServiceConfig):
     self._config = config
@@ -349,6 +446,10 @@ class OracleArtifactService(BaseArtifactService):
             await _call(cursor.execute, statement)
           except Exception as e:
             if _is_oracle_already_exists_error(e):
+              continue
+            if _is_oracle_missing_constraint_error(e):
+              continue
+            if _is_oracle_name_already_used_error(e):
               continue
             raise
         await _call(connection.commit)

@@ -19,9 +19,11 @@ from google.adk.sessions.base_session_service import BaseSessionService
 from google.adk.sessions.base_session_service import GetSessionConfig
 from google.adk.sessions.base_session_service import ListSessionsResponse
 from google.adk.sessions.session import Session
+from google.adk.sessions.state import State
 from pydantic import BaseModel
 from pydantic import Field
 from pydantic import field_validator
+from pydantic import model_validator
 from typing_extensions import override
 
 
@@ -87,6 +89,12 @@ async def _json_to_dict(value: Any) -> dict[str, Any]:
   return value
 
 
+async def _json_row_to_dict(row: Any) -> tuple[bool, dict[str, Any]]:
+  if row is None:
+    return False, {}
+  return True, await _json_to_dict(row[0])
+
+
 async def _event_from_json(value: Any) -> Event:
   value = await _read_db_value(value)
   if isinstance(value, str):
@@ -126,6 +134,39 @@ def _is_oracle_already_exists_error(error: BaseException) -> bool:
   return False
 
 
+def _json_dump(value: dict[str, Any]) -> str:
+  return json.dumps(value, allow_nan=False)
+
+
+def _extract_state_delta(state: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+  deltas: dict[str, dict[str, Any]] = {
+      "app": {},
+      "user": {},
+      "session": {},
+  }
+  for key, value in dict(state or {}).items():
+    if key.startswith(State.APP_PREFIX):
+      deltas["app"][key.removeprefix(State.APP_PREFIX)] = value
+    elif key.startswith(State.USER_PREFIX):
+      deltas["user"][key.removeprefix(State.USER_PREFIX)] = value
+    elif not key.startswith(State.TEMP_PREFIX):
+      deltas["session"][key] = value
+  return deltas
+
+
+def _merge_state(
+    app_state: dict[str, Any],
+    user_state: dict[str, Any],
+    session_state: dict[str, Any],
+) -> dict[str, Any]:
+  merged = dict(session_state)
+  for key, value in app_state.items():
+    merged[f"{State.APP_PREFIX}{key}"] = value
+  for key, value in user_state.items():
+    merged[f"{State.USER_PREFIX}{key}"] = value
+  return merged
+
+
 class OracleSessionServiceConfig(BaseModel):
   """Configuration for Oracle-backed ADK session storage."""
 
@@ -149,9 +190,15 @@ class OracleSessionServiceConfig(BaseModel):
       )
     return table_prefix
 
+  @model_validator(mode="after")
+  def _validate_pool_bounds(self) -> OracleSessionServiceConfig:
+    if self.pool_max < self.pool_min:
+      raise ValueError("pool_max must be greater than or equal to pool_min")
+    return self
+
 
 class OracleSessionService(BaseSessionService):
-  """Minimal Oracle Database session service skeleton."""
+  """ADK session service backed by Oracle Database."""
 
   def __init__(self, config: OracleSessionServiceConfig):
     self._config = config
@@ -160,6 +207,185 @@ class OracleSessionService(BaseSessionService):
 
   def _table_name(self, suffix: str) -> str:
     return f"{self._config.table_prefix}_{suffix}"
+
+  async def _get_app_state_from_cursor(
+      self,
+      cursor: Any,
+      app_name: str,
+      *,
+      for_update: bool = False,
+  ) -> tuple[bool, dict[str, Any]]:
+    suffix = " FOR UPDATE" if for_update else ""
+    await _call(
+        cursor.execute,
+        f"""
+        SELECT state_json
+        FROM {self._table_name("APP_STATES")}
+        WHERE app_name = :app_name
+        {suffix}
+        """,
+        {"app_name": app_name},
+    )
+    row = await _call(cursor.fetchone)
+    return await _json_row_to_dict(row)
+
+  async def _get_user_state_from_cursor(
+      self,
+      cursor: Any,
+      app_name: str,
+      user_id: str,
+      *,
+      for_update: bool = False,
+  ) -> tuple[bool, dict[str, Any]]:
+    suffix = " FOR UPDATE" if for_update else ""
+    await _call(
+        cursor.execute,
+        f"""
+        SELECT state_json
+        FROM {self._table_name("USER_STATES")}
+        WHERE app_name = :app_name
+          AND user_id = :user_id
+        {suffix}
+        """,
+        {"app_name": app_name, "user_id": user_id},
+    )
+    row = await _call(cursor.fetchone)
+    return await _json_row_to_dict(row)
+
+  async def _load_app_state(
+      self,
+      cursor: Any,
+      app_name: str,
+      *,
+      for_update: bool = False,
+  ) -> dict[str, Any]:
+    _, state = await self._get_app_state_from_cursor(
+        cursor, app_name, for_update=for_update
+    )
+    return state
+
+  async def _load_user_state(
+      self,
+      cursor: Any,
+      app_name: str,
+      user_id: str,
+      *,
+      for_update: bool = False,
+  ) -> dict[str, Any]:
+    _, state = await self._get_user_state_from_cursor(
+        cursor, app_name, user_id, for_update=for_update
+    )
+    return state
+
+  async def _upsert_app_state(
+      self,
+      cursor: Any,
+      app_name: str,
+      delta: dict[str, Any],
+      update_time: datetime,
+  ) -> dict[str, Any]:
+    exists, existing = await self._get_app_state_from_cursor(
+        cursor, app_name, for_update=True
+    )
+    if not delta:
+      return existing
+
+    merged = {**existing, **delta}
+    if exists:
+      await _call(
+          cursor.execute,
+          f"""
+          UPDATE {self._table_name("APP_STATES")}
+          SET state_json = :state_json,
+              update_time = :update_time
+          WHERE app_name = :app_name
+          """,
+          {
+              "state_json": _json_dump(merged),
+              "update_time": update_time,
+              "app_name": app_name,
+          },
+      )
+    else:
+      await _call(
+          cursor.execute,
+          f"""
+          INSERT INTO {self._table_name("APP_STATES")} (
+            app_name,
+            state_json,
+            update_time
+          )
+          VALUES (
+            :app_name,
+            :state_json,
+            :update_time
+          )
+          """,
+          {
+              "app_name": app_name,
+              "state_json": _json_dump(merged),
+              "update_time": update_time,
+          },
+      )
+    return merged
+
+  async def _upsert_user_state(
+      self,
+      cursor: Any,
+      app_name: str,
+      user_id: str,
+      delta: dict[str, Any],
+      update_time: datetime,
+  ) -> dict[str, Any]:
+    exists, existing = await self._get_user_state_from_cursor(
+        cursor, app_name, user_id, for_update=True
+    )
+    if not delta:
+      return existing
+
+    merged = {**existing, **delta}
+    if exists:
+      await _call(
+          cursor.execute,
+          f"""
+          UPDATE {self._table_name("USER_STATES")}
+          SET state_json = :state_json,
+              update_time = :update_time
+          WHERE app_name = :app_name
+            AND user_id = :user_id
+          """,
+          {
+              "state_json": _json_dump(merged),
+              "update_time": update_time,
+              "app_name": app_name,
+              "user_id": user_id,
+          },
+      )
+    else:
+      await _call(
+          cursor.execute,
+          f"""
+          INSERT INTO {self._table_name("USER_STATES")} (
+            app_name,
+            user_id,
+            state_json,
+            update_time
+          )
+          VALUES (
+            :app_name,
+            :user_id,
+            :state_json,
+            :update_time
+          )
+          """,
+          {
+              "app_name": app_name,
+              "user_id": user_id,
+              "state_json": _json_dump(merged),
+              "update_time": update_time,
+          },
+      )
+    return merged
 
   async def _initialize_schema(self) -> None:
     if not self._config.auto_create_tables or self._schema_initialized:
@@ -204,8 +430,11 @@ class OracleSessionService(BaseSessionService):
     if not session_id:
       session_id = platform_uuid.new_uuid()
 
-    session_state = dict(state or {})
-    state_json = json.dumps(session_state, allow_nan=False)
+    state_deltas = _extract_state_delta(state)
+    app_state_delta = state_deltas["app"]
+    user_state_delta = state_deltas["user"]
+    session_state = state_deltas["session"]
+    state_json = _json_dump(session_state)
     now_timestamp = platform_time.get_time()
     now = datetime.fromtimestamp(now_timestamp, tz=timezone.utc)
     sessions_table = self._table_name("SESSIONS")
@@ -234,6 +463,13 @@ class OracleSessionService(BaseSessionService):
         raise AlreadyExistsError(
             f"Session with id {session_id} already exists."
         )
+
+      app_state = await self._upsert_app_state(
+          cursor, app_name, app_state_delta, now
+      )
+      user_state = await self._upsert_user_state(
+          cursor, app_name, user_id, user_state_delta, now
+      )
 
       await _call(
           cursor.execute,
@@ -265,6 +501,9 @@ class OracleSessionService(BaseSessionService):
           },
       )
       await _call(connection.commit)
+    except BaseException:
+      await _rollback(connection)
+      raise
     finally:
       if cursor is not None:
         await _close(cursor)
@@ -274,7 +513,7 @@ class OracleSessionService(BaseSessionService):
         app_name=app_name,
         user_id=user_id,
         id=session_id,
-        state=session_state,
+        state=_merge_state(app_state, user_state, session_state),
         events=[],
         last_update_time=now_timestamp,
     )
@@ -323,6 +562,10 @@ class OracleSessionService(BaseSessionService):
 
       session_state = await _json_to_dict(session_row[0])
       last_update_time = _timestamp_to_float(session_row[1])
+      app_state = await self._load_app_state(cursor, app_name)
+      user_state = await self._load_user_state(
+          cursor, app_name, user_id
+      )
 
       event_rows = []
       if not (config and config.num_recent_events == 0):
@@ -373,7 +616,7 @@ class OracleSessionService(BaseSessionService):
           app_name=app_name,
           user_id=user_id,
           id=session_id,
-          state=session_state,
+          state=_merge_state(app_state, user_state, session_state),
           events=events,
           last_update_time=last_update_time,
       )
@@ -410,17 +653,23 @@ class OracleSessionService(BaseSessionService):
       )
       rows = await _call(cursor.fetchall)
       sessions = []
+      app_state = await self._load_app_state(cursor, app_name)
       for row in rows:
         session_user_id = row[0]
         session_id = row[1]
         session_state = await _json_to_dict(row[2])
         last_update_time = _timestamp_to_float(row[3])
+        user_state_for_session = await self._load_user_state(
+            cursor, app_name, session_user_id
+        )
         sessions.append(
             Session(
                 app_name=app_name,
                 user_id=session_user_id,
                 id=session_id,
-                state=session_state,
+                state=_merge_state(
+                    app_state, user_state_for_session, session_state
+                ),
                 events=[],
                 last_update_time=last_update_time,
             )
@@ -502,8 +751,24 @@ class OracleSessionService(BaseSessionService):
         raise ValueError(f"Session {session.id} not found.")
 
       stored_state = await _json_to_dict(session_row[0])
-      if state_delta:
-        stored_state.update(state_delta)
+      state_deltas = _extract_state_delta(state_delta)
+      app_state_delta = state_deltas["app"]
+      user_state_delta = state_deltas["user"]
+      session_state_delta = state_deltas["session"]
+      if app_state_delta:
+        await self._upsert_app_state(
+            cursor, session.app_name, app_state_delta, event_time
+        )
+      if user_state_delta:
+        await self._upsert_user_state(
+            cursor,
+            session.app_name,
+            session.user_id,
+            user_state_delta,
+            event_time,
+        )
+      if session_state_delta:
+        stored_state.update(session_state_delta)
 
       await _call(
           cursor.execute,
@@ -516,7 +781,7 @@ class OracleSessionService(BaseSessionService):
             AND session_id = :session_id
           """,
           {
-              "state_json": json.dumps(stored_state, allow_nan=False),
+              "state_json": _json_dump(stored_state),
               "last_update_time": event_time,
               "app_name": session.app_name,
               "user_id": session.user_id,
@@ -567,3 +832,29 @@ class OracleSessionService(BaseSessionService):
   @override
   async def flush(self) -> None:
     pass
+
+  async def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any]:
+    await self._initialize_schema()
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      state = await self._load_user_state(cursor, app_name, user_id)
+      return dict(state)
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)
+
+  async def get_app_state(self, app_name: str) -> dict[str, Any]:
+    await self._initialize_schema()
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      state = await self._load_app_state(cursor, app_name)
+      return dict(state)
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)

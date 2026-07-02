@@ -326,7 +326,7 @@ class OracleMemoryServiceConfig(BaseModel):
 
 
 class OracleMemoryService(BaseMemoryService):
-  """Skeleton ADK memory service backed by oracleagentmemory."""
+  """ADK memory service backed by Oracle Database and Oracle Agent Memory."""
 
   def __init__(self, config: OracleMemoryServiceConfig):
     self._config = config
