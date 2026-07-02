@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 from decimal import Decimal
 from datetime import datetime
 from datetime import timezone
@@ -169,6 +171,43 @@ def _ensure_part(artifact: types.Part | dict[str, Any]) -> types.Part:
   raise ValueError("artifact must be a google.genai.types.Part or dict")
 
 
+def _inline_data_to_bytes(data: Any) -> bytes:
+  if data is None:
+    raise ValueError("inline_data.data is required for inline_data artifacts.")
+  if isinstance(data, bytes):
+    return data
+  if isinstance(data, bytearray):
+    return bytes(data)
+  if isinstance(data, memoryview):
+    return data.tobytes()
+  if isinstance(data, str):
+    normalized_data = data.strip().replace("-", "+").replace("_", "/")
+    if not normalized_data:
+      return b""
+
+    if "=" not in normalized_data:
+      remainder = len(normalized_data) % 4
+      if remainder == 1:
+        raise ValueError(
+            "inline_data.data must be valid base64-encoded binary data."
+        )
+      normalized_data += "=" * (-len(normalized_data) % 4)
+    elif len(normalized_data) % 4 != 0:
+      raise ValueError(
+          "inline_data.data must be valid base64-encoded binary data."
+      )
+
+    try:
+      return base64.b64decode(normalized_data, validate=True)
+    except binascii.Error as e:
+      raise ValueError(
+          "inline_data.data must be valid base64-encoded binary data."
+      ) from e
+  raise ValueError(
+      "inline_data.data must be bytes or a base64-encoded string."
+  )
+
+
 def _inline_part_metadata_json(
     *, payload: bytes, mime_type: str | None
 ) -> dict[str, Any]:
@@ -227,7 +266,7 @@ def _part_to_payload(
     )
 
   if part.inline_data is not None:
-    payload = _to_bytes(part.inline_data.data or b"")
+    payload = _inline_data_to_bytes(part.inline_data.data)
     mime_type = part.inline_data.mime_type
     return (
         "INLINE_DATA",
