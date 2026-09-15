@@ -28,6 +28,7 @@ from typing_extensions import override
 
 
 _ORACLE_ALREADY_EXISTS_CODE = 955
+_ORACLE_UNIQUE_CONSTRAINT_CODE = 1
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
@@ -130,6 +131,16 @@ def _is_oracle_already_exists_error(error: BaseException) -> bool:
 
   for arg in getattr(error, "args", ()):
     if getattr(arg, "code", None) == _ORACLE_ALREADY_EXISTS_CODE:
+      return True
+  return False
+
+
+def _is_oracle_unique_constraint_error(error: BaseException) -> bool:
+  if f"ORA-{_ORACLE_UNIQUE_CONSTRAINT_CODE:05d}" in str(error):
+    return True
+
+  for arg in getattr(error, "args", ()):
+    if getattr(arg, "code", None) == _ORACLE_UNIQUE_CONSTRAINT_CODE:
       return True
   return False
 
@@ -291,42 +302,57 @@ class OracleSessionService(BaseSessionService):
       return existing
 
     merged = {**existing, **delta}
-    if exists:
-      await _call(
-          cursor.execute,
-          f"""
-          UPDATE {self._table_name("APP_STATES")}
-          SET state_json = :state_json,
-              update_time = :update_time
-          WHERE app_name = :app_name
-          """,
-          {
-              "state_json": _json_dump(merged),
-              "update_time": update_time,
-              "app_name": app_name,
-          },
+    if not exists:
+      try:
+        await _call(
+            cursor.execute,
+            f"""
+            INSERT INTO {self._table_name("APP_STATES")} (
+              app_name,
+              state_json,
+              update_time
+            )
+            VALUES (
+              :app_name,
+              :state_json,
+              :update_time
+            )
+            """,
+            {
+                "app_name": app_name,
+                "state_json": _json_dump(merged),
+                "update_time": update_time,
+            },
+        )
+        return merged
+      except Exception as e:
+        if not _is_oracle_unique_constraint_error(e):
+          raise
+        conflict_error = e
+
+      exists, existing = await self._get_app_state_from_cursor(
+          cursor, app_name, for_update=True
       )
-    else:
-      await _call(
-          cursor.execute,
-          f"""
-          INSERT INTO {self._table_name("APP_STATES")} (
-            app_name,
-            state_json,
-            update_time
-          )
-          VALUES (
-            :app_name,
-            :state_json,
-            :update_time
-          )
-          """,
-          {
-              "app_name": app_name,
-              "state_json": _json_dump(merged),
-              "update_time": update_time,
-          },
-      )
+      if not exists:
+        raise RuntimeError(
+            "App state insert conflicted but the row could not be reloaded."
+        ) from conflict_error
+      merged = {**existing, **delta}
+
+    await _call(
+        cursor.execute,
+        f"""
+        UPDATE {self._table_name("APP_STATES")}
+        SET state_json = :state_json,
+            update_time = :update_time
+        WHERE app_name = :app_name
+        """,
+        {
+            "state_json": _json_dump(merged),
+            "update_time": update_time,
+            "app_name": app_name,
+        },
+    )
     return merged
 
   async def _upsert_user_state(
@@ -344,47 +370,62 @@ class OracleSessionService(BaseSessionService):
       return existing
 
     merged = {**existing, **delta}
-    if exists:
-      await _call(
-          cursor.execute,
-          f"""
-          UPDATE {self._table_name("USER_STATES")}
-          SET state_json = :state_json,
-              update_time = :update_time
-          WHERE app_name = :app_name
-            AND user_id = :user_id
-          """,
-          {
-              "state_json": _json_dump(merged),
-              "update_time": update_time,
-              "app_name": app_name,
-              "user_id": user_id,
-          },
+    if not exists:
+      try:
+        await _call(
+            cursor.execute,
+            f"""
+            INSERT INTO {self._table_name("USER_STATES")} (
+              app_name,
+              user_id,
+              state_json,
+              update_time
+            )
+            VALUES (
+              :app_name,
+              :user_id,
+              :state_json,
+              :update_time
+            )
+            """,
+            {
+                "app_name": app_name,
+                "user_id": user_id,
+                "state_json": _json_dump(merged),
+                "update_time": update_time,
+            },
+        )
+        return merged
+      except Exception as e:
+        if not _is_oracle_unique_constraint_error(e):
+          raise
+        conflict_error = e
+
+      exists, existing = await self._get_user_state_from_cursor(
+          cursor, app_name, user_id, for_update=True
       )
-    else:
-      await _call(
-          cursor.execute,
-          f"""
-          INSERT INTO {self._table_name("USER_STATES")} (
-            app_name,
-            user_id,
-            state_json,
-            update_time
-          )
-          VALUES (
-            :app_name,
-            :user_id,
-            :state_json,
-            :update_time
-          )
-          """,
-          {
-              "app_name": app_name,
-              "user_id": user_id,
-              "state_json": _json_dump(merged),
-              "update_time": update_time,
-          },
-      )
+      if not exists:
+        raise RuntimeError(
+            "User state insert conflicted but the row could not be reloaded."
+        ) from conflict_error
+      merged = {**existing, **delta}
+
+    await _call(
+        cursor.execute,
+        f"""
+        UPDATE {self._table_name("USER_STATES")}
+        SET state_json = :state_json,
+            update_time = :update_time
+        WHERE app_name = :app_name
+          AND user_id = :user_id
+        """,
+        {
+            "state_json": _json_dump(merged),
+            "update_time": update_time,
+            "app_name": app_name,
+            "user_id": user_id,
+        },
+    )
     return merged
 
   async def _initialize_schema(self) -> None:

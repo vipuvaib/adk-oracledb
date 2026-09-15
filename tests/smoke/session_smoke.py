@@ -445,6 +445,112 @@ async def _state_scope_smoke(service: OracleSessionService) -> None:
       )
 
 
+async def _concurrent_first_scoped_state_writes(
+    service: OracleSessionService,
+    *,
+    getter_name: str,
+    app_name: str,
+    user_ids: tuple[str, str],
+    states: tuple[dict[str, object], dict[str, object]],
+):
+  """Force both first scoped-state reads to complete before either insert."""
+  original_getter = getattr(service, getter_name)
+  first_read_barrier = asyncio.Barrier(2)
+  first_read_count = 0
+
+  async def synchronized_getter(*args, **kwargs):
+    nonlocal first_read_count
+    result = await original_getter(*args, **kwargs)
+    if kwargs.get("for_update", False) and first_read_count < 2:
+      first_read_count += 1
+      await first_read_barrier.wait()
+    return result
+
+  setattr(service, getter_name, synchronized_getter)
+  try:
+    results = await asyncio.gather(
+        service.create_session(
+            app_name=app_name,
+            user_id=user_ids[0],
+            state=states[0],
+        ),
+        service.create_session(
+            app_name=app_name,
+            user_id=user_ids[1],
+            state=states[1],
+        ),
+        return_exceptions=True,
+    )
+  finally:
+    setattr(service, getter_name, original_getter)
+
+  failures = [result for result in results if isinstance(result, BaseException)]
+  if failures:
+    raise SystemExit(
+        "concurrent first scoped-state writes failed: "
+        f"{failures[0]!r}"
+    )
+  return results
+
+
+async def _first_scoped_state_race_smoke(
+    service: OracleSessionService,
+) -> None:
+  """Verify duplicate-key recovery preserves concurrent first state deltas."""
+  smoke_id = uuid.uuid4().hex
+  cleanup: list[tuple[str, str, str]] = []
+  await service._initialize_schema()
+
+  app_name = f"{APP_NAME}_first_app_state_{smoke_id}"
+  app_users = (f"{USER_ID}_app_a_{smoke_id}", f"{USER_ID}_app_b_{smoke_id}")
+  try:
+    app_sessions = await _concurrent_first_scoped_state_writes(
+        service,
+        getter_name="_get_app_state_from_cursor",
+        app_name=app_name,
+        user_ids=app_users,
+        states=(
+            {"app:first_writer": "one"},
+            {"app:second_writer": "two"},
+        ),
+    )
+    cleanup.extend(
+        (app_name, session.user_id, session.id) for session in app_sessions
+    )
+    app_state = await service.get_app_state(app_name)
+    _assert_state_value(app_state, "first_writer", "one", "first app state")
+    _assert_state_value(app_state, "second_writer", "two", "first app state")
+
+    user_app_name = f"{APP_NAME}_first_user_state_{smoke_id}"
+    user_id = f"{USER_ID}_user_{smoke_id}"
+    user_sessions = await _concurrent_first_scoped_state_writes(
+        service,
+        getter_name="_get_user_state_from_cursor",
+        app_name=user_app_name,
+        user_ids=(user_id, user_id),
+        states=(
+            {"user:first_writer": "one"},
+            {"user:second_writer": "two"},
+        ),
+    )
+    cleanup.extend(
+        (user_app_name, session.user_id, session.id)
+        for session in user_sessions
+    )
+    user_state = await service.get_user_state(user_app_name, user_id)
+    _assert_state_value(user_state, "first_writer", "one", "first user state")
+    _assert_state_value(user_state, "second_writer", "two", "first user state")
+    print("session first scoped-state race smoke passed")
+  finally:
+    for app_name_value, user_id_value, session_id in reversed(cleanup):
+      await _delete_session_if_exists(
+          service,
+          app_name=app_name_value,
+          user_id=user_id_value,
+          session_id=session_id,
+      )
+
+
 async def main() -> None:
   _config_validation_smoke()
   _registry_construction_smoke()
@@ -452,6 +558,7 @@ async def main() -> None:
   await _lifecycle_smoke(service)
   await _append_event_smoke(service)
   await _state_scope_smoke(service)
+  await _first_scoped_state_race_smoke(service)
   print("session smoke completed successfully")
 
 

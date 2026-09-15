@@ -92,6 +92,8 @@ def _parse_csv(
 
 
 def _build_dsn(*, host: str, port: int, service_name: str) -> str:
+  if ":" in host:
+    host = f"[{host}]"
   return f"{host}:{port}/{service_name}"
 
 
