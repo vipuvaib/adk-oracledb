@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import inspect
 from typing import Any
-from typing import TYPE_CHECKING
+from typing import Protocol
 
-if TYPE_CHECKING:
-  from adk_oracledb.sessions.service import OracleSessionServiceConfig
+
+class OracleDatabaseConfig(Protocol):
+  """Configuration shape shared by Oracle-backed service implementations."""
+
+  user: str
+  password: str
+  dsn: str
+  pool_min: int
+  pool_max: int
 
 
 def _load_oracledb() -> Any:
@@ -19,7 +26,7 @@ def _load_oracledb() -> Any:
   return oracledb
 
 
-def _connect_kwargs(config: OracleSessionServiceConfig) -> dict[str, Any]:
+def _connect_kwargs(config: OracleDatabaseConfig) -> dict[str, Any]:
   return {
       "user": config.user,
       "password": config.password,
@@ -27,7 +34,7 @@ def _connect_kwargs(config: OracleSessionServiceConfig) -> dict[str, Any]:
   }
 
 
-def _pool_kwargs(config: OracleSessionServiceConfig) -> dict[str, Any]:
+def _pool_kwargs(config: OracleDatabaseConfig) -> dict[str, Any]:
   return {
       **_connect_kwargs(config),
       "min": config.pool_min,
@@ -37,9 +44,9 @@ def _pool_kwargs(config: OracleSessionServiceConfig) -> dict[str, Any]:
 
 
 class OracleConnectionFactory:
-  """Creates Oracle connections and pools from session service config."""
+  """Creates Oracle connections and pools from shared service config."""
 
-  def __init__(self, config: OracleSessionServiceConfig):
+  def __init__(self, config: OracleDatabaseConfig):
     self._config = config
     self._oracledb = _load_oracledb()
 
@@ -48,6 +55,11 @@ class OracleConnectionFactory:
     return hasattr(self._oracledb, "connect_async") and hasattr(
         self._oracledb, "create_pool_async"
     )
+
+  @property
+  def supports_async_connections(self) -> bool:
+    """Whether this driver exposes the asynchronous connection API."""
+    return hasattr(self._oracledb, "connect_async")
 
   async def create_connection(self) -> Any:
     """Create an Oracle connection, preferring python-oracledb async APIs."""
@@ -72,9 +84,13 @@ class OracleConnectionFactory:
     return self._oracledb.create_pool(**_pool_kwargs(self._config))
 
 
-async def create_oracle_connection(config: OracleSessionServiceConfig) -> Any:
+async def create_oracle_connection(config: OracleDatabaseConfig) -> Any:
   return await OracleConnectionFactory(config).create_connection()
 
 
-async def create_oracle_pool(config: OracleSessionServiceConfig) -> Any:
+async def create_oracle_pool(config: OracleDatabaseConfig) -> Any:
   return await OracleConnectionFactory(config).create_pool()
+
+def supports_async_connections(config: OracleDatabaseConfig) -> bool:
+  """Return whether connections for ``config`` can use async driver APIs."""
+  return OracleConnectionFactory(config).supports_async_connections

@@ -182,7 +182,10 @@ The memory service also accepts provider settings in the URI, including
 
 `pool_min` and `pool_max` apply to `OracleMemoryService`.
 `OracleSessionService` and `OracleArtifactService` currently use
-per-operation Oracle connections.
+per-operation Oracle connections. They prefer python-oracledb's async
+connection APIs. With a synchronous-only driver, each complete database
+operation runs in a worker thread so cursor and connection calls do not block
+the ADK event loop.
 
 `OracleSessionService` follows ADK state scoping: ordinary state keys are
 session scoped, `user:` keys are shared across sessions for the same app/user,

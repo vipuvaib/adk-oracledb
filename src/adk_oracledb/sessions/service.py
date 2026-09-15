@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from adk_oracledb.connection import create_oracle_connection
+from adk_oracledb.connection import supports_async_connections
 from google.adk.errors.already_exists_error import AlreadyExistsError
 from google.adk.events.event import Event
 from google.adk.platform import time as platform_time
@@ -40,6 +41,20 @@ async def _maybe_await(value: Any) -> Any:
 
 async def _call(method: Any, *args: Any, **kwargs: Any) -> Any:
   return await _maybe_await(method(*args, **kwargs))
+
+
+def _run_coroutine_in_worker(coroutine: Any) -> Any:
+  return asyncio.run(coroutine)
+
+
+def _database_operation(method: Any) -> Any:
+  """Keep complete synchronous-driver operations off the event loop."""
+
+  async def wrapped(self: Any, *args: Any, **kwargs: Any) -> Any:
+    await self._initialize_schema()
+    return await self._run_database_operation(method, *args, **kwargs)
+
+  return wrapped
 
 
 async def _close(resource: Any) -> None:
@@ -218,6 +233,18 @@ class OracleSessionService(BaseSessionService):
 
   def _table_name(self, suffix: str) -> str:
     return f"{self._config.table_prefix}_{suffix}"
+
+  def _uses_async_connections(self) -> bool:
+    return supports_async_connections(self._config)
+
+  async def _run_database_operation(
+      self, operation: Any, *args: Any, **kwargs: Any
+  ) -> Any:
+    if self._uses_async_connections():
+      return await operation(self, *args, **kwargs)
+    return await asyncio.to_thread(
+        _run_coroutine_in_worker, operation(self, *args, **kwargs)
+    )
 
   async def _get_app_state_from_cursor(
       self,
@@ -436,28 +463,37 @@ class OracleSessionService(BaseSessionService):
       if self._schema_initialized:
         return
 
-      connection = await create_oracle_connection(self._config)
-      cursor = None
-      try:
-        cursor = await _call(connection.cursor)
-        for statement in _schema_statements(self._config.table_prefix):
-          try:
-            await _call(cursor.execute, statement)
-          except Exception as e:
-            if _is_oracle_already_exists_error(e):
-              continue
-            raise
-        await _call(connection.commit)
-        self._schema_initialized = True
-      except BaseException:
-        await _rollback(connection)
-        raise
-      finally:
-        if cursor is not None:
-          await _close(cursor)
-        await _close(connection)
+      if self._uses_async_connections():
+        await self._initialize_schema_impl()
+      else:
+        await asyncio.to_thread(
+            _run_coroutine_in_worker, self._initialize_schema_impl()
+        )
+      self._schema_initialized = True
+
+  async def _initialize_schema_impl(self) -> None:
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      for statement in _schema_statements(self._config.table_prefix):
+        try:
+          await _call(cursor.execute, statement)
+        except Exception as e:
+          if _is_oracle_already_exists_error(e):
+            continue
+          raise
+      await _call(connection.commit)
+    except BaseException:
+      await _rollback(connection)
+      raise
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)
 
   @override
+  @_database_operation
   async def create_session(
       self,
       *,
@@ -560,6 +596,7 @@ class OracleSessionService(BaseSessionService):
     )
 
   @override
+  @_database_operation
   async def get_session(
       self,
       *,
@@ -667,6 +704,7 @@ class OracleSessionService(BaseSessionService):
       await _close(connection)
 
   @override
+  @_database_operation
   async def list_sessions(
       self, *, app_name: str, user_id: str | None = None
   ) -> ListSessionsResponse:
@@ -722,6 +760,7 @@ class OracleSessionService(BaseSessionService):
       await _close(connection)
 
   @override
+  @_database_operation
   async def delete_session(
       self, *, app_name: str, user_id: str, session_id: str
   ) -> None:
@@ -763,10 +802,22 @@ class OracleSessionService(BaseSessionService):
     event_timestamp = event.timestamp or platform_time.get_time()
     event.timestamp = event_timestamp
     event_time = datetime.fromtimestamp(event_timestamp, tz=timezone.utc)
-    state_delta = event.actions.state_delta or {}
+    await self._run_database_operation(
+        OracleSessionService._append_event_to_database,
+        session,
+        event,
+        event_time,
+    )
+
+    session.last_update_time = event_timestamp
+    return await super().append_event(session, event)
+
+  async def _append_event_to_database(
+      self, session: Session, event: Event, event_time: datetime
+  ) -> None:
     sessions_table = self._table_name("SESSIONS")
     events_table = self._table_name("EVENTS")
-
+    state_delta = event.actions.state_delta or {}
     connection = await create_oracle_connection(self._config)
     cursor = None
     try:
@@ -867,13 +918,11 @@ class OracleSessionService(BaseSessionService):
         await _close(cursor)
       await _close(connection)
 
-    session.last_update_time = event_timestamp
-    return await super().append_event(session, event)
-
   @override
   async def flush(self) -> None:
     pass
 
+  @_database_operation
   async def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any]:
     await self._initialize_schema()
     connection = await create_oracle_connection(self._config)
@@ -887,6 +936,7 @@ class OracleSessionService(BaseSessionService):
         await _close(cursor)
       await _close(connection)
 
+  @_database_operation
   async def get_app_state(self, app_name: str) -> dict[str, Any]:
     await self._initialize_schema()
     connection = await create_oracle_connection(self._config)

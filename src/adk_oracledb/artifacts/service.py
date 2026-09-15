@@ -6,6 +6,7 @@ import binascii
 from decimal import Decimal
 from datetime import datetime
 from datetime import timezone
+from functools import wraps
 import hashlib
 import inspect
 import json
@@ -15,6 +16,7 @@ from typing import Any
 from urllib.parse import quote
 
 from adk_oracledb.connection import create_oracle_connection
+from adk_oracledb.connection import supports_async_connections
 from google.adk.artifacts.base_artifact_service import ArtifactVersion
 from google.adk.artifacts.base_artifact_service import BaseArtifactService
 from google.genai import types
@@ -44,6 +46,21 @@ async def _maybe_await(value: Any) -> Any:
 
 async def _call(method: Any, *args: Any, **kwargs: Any) -> Any:
   return await _maybe_await(method(*args, **kwargs))
+
+
+def _run_coroutine_in_worker(coroutine: Any) -> Any:
+  return asyncio.run(coroutine)
+
+
+def _database_operation(method: Any) -> Any:
+  """Keep complete synchronous-driver operations off the event loop."""
+
+  @wraps(method)
+  async def wrapped(self: Any, *args: Any, **kwargs: Any) -> Any:
+    await self._ensure_schema()
+    return await self._run_database_operation(method, *args, **kwargs)
+
+  return wrapped
 
 
 async def _close(resource: Any) -> None:
@@ -429,6 +446,18 @@ class OracleArtifactService(BaseArtifactService):
   def _artifacts_table_name(self) -> str:
     return f"{self._config.table_prefix}_ARTIFACTS"
 
+  def _uses_async_connections(self) -> bool:
+    return supports_async_connections(self._config)
+
+  async def _run_database_operation(
+      self, operation: Any, *args: Any, **kwargs: Any
+  ) -> Any:
+    if self._uses_async_connections():
+      return await operation(self, *args, **kwargs)
+    return await asyncio.to_thread(
+        _run_coroutine_in_worker, operation(self, *args, **kwargs)
+    )
+
   async def _ensure_schema(self) -> None:
     if not self._config.auto_create_tables or self._schema_initialized:
       return
@@ -437,32 +466,41 @@ class OracleArtifactService(BaseArtifactService):
       if self._schema_initialized:
         return
 
-      connection = await create_oracle_connection(self._config)
-      cursor = None
-      try:
-        cursor = await _call(connection.cursor)
-        for statement in _schema_statements(self._config.table_prefix):
-          try:
-            await _call(cursor.execute, statement)
-          except Exception as e:
-            if _is_oracle_already_exists_error(e):
-              continue
-            if _is_oracle_missing_constraint_error(e):
-              continue
-            if _is_oracle_name_already_used_error(e):
-              continue
-            raise
-        await _call(connection.commit)
-        self._schema_initialized = True
-      except BaseException:
-        await _rollback(connection)
-        raise
-      finally:
-        if cursor is not None:
-          await _close(cursor)
-        await _close(connection)
+      if self._uses_async_connections():
+        await self._ensure_schema_impl()
+      else:
+        await asyncio.to_thread(
+            _run_coroutine_in_worker, self._ensure_schema_impl()
+        )
+      self._schema_initialized = True
+
+  async def _ensure_schema_impl(self) -> None:
+    connection = await create_oracle_connection(self._config)
+    cursor = None
+    try:
+      cursor = await _call(connection.cursor)
+      for statement in _schema_statements(self._config.table_prefix):
+        try:
+          await _call(cursor.execute, statement)
+        except Exception as e:
+          if _is_oracle_already_exists_error(e):
+            continue
+          if _is_oracle_missing_constraint_error(e):
+            continue
+          if _is_oracle_name_already_used_error(e):
+            continue
+          raise
+      await _call(connection.commit)
+    except BaseException:
+      await _rollback(connection)
+      raise
+    finally:
+      if cursor is not None:
+        await _close(cursor)
+      await _close(connection)
 
   @override
+  @_database_operation
   async def save_artifact(
       self,
       *,
@@ -606,6 +644,7 @@ class OracleArtifactService(BaseArtifactService):
       await _close(connection)
 
   @override
+  @_database_operation
   async def load_artifact(
       self,
       *,
@@ -690,6 +729,7 @@ class OracleArtifactService(BaseArtifactService):
       await _close(connection)
 
   @override
+  @_database_operation
   async def list_artifact_keys(
       self, *, app_name: str, user_id: str, session_id: str | None = None
   ) -> list[str]:
@@ -749,6 +789,7 @@ class OracleArtifactService(BaseArtifactService):
       await _close(connection)
 
   @override
+  @_database_operation
   async def delete_artifact(
       self,
       *,
@@ -802,6 +843,7 @@ class OracleArtifactService(BaseArtifactService):
       await _close(connection)
 
   @override
+  @_database_operation
   async def list_versions(
       self,
       *,
@@ -855,6 +897,7 @@ class OracleArtifactService(BaseArtifactService):
       await _close(connection)
 
   @override
+  @_database_operation
   async def list_artifact_versions(
       self,
       *,
@@ -908,6 +951,7 @@ class OracleArtifactService(BaseArtifactService):
       await _close(connection)
 
   @override
+  @_database_operation
   async def get_artifact_version(
       self,
       *,
