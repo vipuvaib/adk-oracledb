@@ -312,9 +312,16 @@ class OracleMemoryServiceConfig(BaseModel):
     normalized = str(value).strip().lower()
     if not normalized:
       return None
-    if normalized not in {"query", "passage", "document"}:
+    if normalized not in {
+        "query",
+        "passage",
+        "document",
+        "search_query",
+        "search_document",
+    }:
       raise ValueError(
-          "embedder_input_type must be 'query', 'passage', or 'document'"
+          "embedder_input_type must be 'query', 'passage', 'document', "
+          "'search_query', or 'search_document'"
       )
     return normalized
 
@@ -359,12 +366,15 @@ class OracleMemoryService(BaseMemoryService):
       kwargs["api_base"] = self._config.embedder_api_base
     if self._config.embedder_api_key is not None:
       kwargs["api_key"] = self._config.embedder_api_key
+    embedding_kwargs: dict[str, Any] = {}
     if self._config.embedder_encoding_format is not None:
-      kwargs["encoding_format"] = self._config.embedder_encoding_format
+      embedding_kwargs["encoding_format"] = self._config.embedder_encoding_format
     if input_type is ...:
       input_type = self._config.embedder_input_type
     if input_type is not None:
-      kwargs["input_type"] = input_type
+      embedding_kwargs["input_type"] = input_type
+    if embedding_kwargs:
+      kwargs["embedding_kwargs"] = embedding_kwargs
     return kwargs
 
   def _build_embedder(self, embedder_cls: Any) -> Any:

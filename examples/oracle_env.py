@@ -92,11 +92,14 @@ def agent_model_from_env() -> Any:
 
   from google.adk.models.lite_llm import LiteLlm
 
-  kwargs: dict[str, str] = {}
+  kwargs: dict[str, Any] = {}
   if endpoint:
     kwargs["api_base"] = endpoint
   if api_key:
     kwargs["api_key"] = api_key
+  if model.startswith("oci/"):
+    # ADK requests stream usage metadata, which OCI does not accept.
+    kwargs["additional_drop_params"] = ["stream_options"]
   return LiteLlm(model=model, **kwargs)
 
 

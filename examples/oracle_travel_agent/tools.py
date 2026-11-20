@@ -232,8 +232,8 @@ async def recall_travel_preferences(
     query: str,
     tool_context: ToolContext,
 ) -> dict[str, object]:
-  """Searches durable travel preferences in the configured memory service."""
-  query = _require_text(query, "query")
+  """Search durable travel preferences; an empty query recalls general preferences."""
+  query = query.strip() or "travel preferences"
   response = await tool_context.search_memory(query)
   memories = [
       {

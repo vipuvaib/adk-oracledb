@@ -28,3 +28,10 @@ htmlcov/
 # Example-generated export files
 examples/oracle_travel_agent/exports/*
 !examples/oracle_travel_agent/exports/.gitignore
+
+# Local development files
+/ade/
+/SESSION_UNDERSTANDING.md
+/PROOFREAD_REGRESSION_TESTS.md
+/run_proofread_regressions.py
+/run_oci_validation.py

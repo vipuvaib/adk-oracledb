@@ -29,6 +29,7 @@ from typing_extensions import override
 
 
 _ORACLE_ALREADY_EXISTS_CODE = 955
+_ORACLE_RESOURCE_BUSY_CODE = 54
 _ORACLE_UNIQUE_CONSTRAINT_CODE = 1
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -140,24 +141,21 @@ def _schema_statements(table_prefix: str) -> list[str]:
   ]
 
 
-def _is_oracle_already_exists_error(error: BaseException) -> bool:
-  if f"ORA-{_ORACLE_ALREADY_EXISTS_CODE:05d}" in str(error):
+def _is_oracle_error_code(error: BaseException, code: int) -> bool:
+  if f"ORA-{code:05d}" in str(error):
     return True
+  return any(
+      getattr(arg, "code", None) == code
+      for arg in getattr(error, "args", ())
+  )
 
-  for arg in getattr(error, "args", ()):
-    if getattr(arg, "code", None) == _ORACLE_ALREADY_EXISTS_CODE:
-      return True
-  return False
+
+def _is_oracle_already_exists_error(error: BaseException) -> bool:
+  return _is_oracle_error_code(error, _ORACLE_ALREADY_EXISTS_CODE)
 
 
 def _is_oracle_unique_constraint_error(error: BaseException) -> bool:
-  if f"ORA-{_ORACLE_UNIQUE_CONSTRAINT_CODE:05d}" in str(error):
-    return True
-
-  for arg in getattr(error, "args", ()):
-    if getattr(arg, "code", None) == _ORACLE_UNIQUE_CONSTRAINT_CODE:
-      return True
-  return False
+  return _is_oracle_error_code(error, _ORACLE_UNIQUE_CONSTRAINT_CODE)
 
 
 def _json_dump(value: dict[str, Any]) -> str:
@@ -471,15 +469,49 @@ class OracleSessionService(BaseSessionService):
         )
       self._schema_initialized = True
 
+  async def _schema_object_exists(
+      self, cursor: Any, object_type: str, object_name: str
+  ) -> bool:
+    await _call(
+        cursor.execute,
+        "SELECT 1 FROM user_objects "
+        "WHERE object_type = :object_type AND object_name = :object_name",
+        {"object_type": object_type, "object_name": object_name},
+    )
+    return await _call(cursor.fetchone) is not None
+
   async def _initialize_schema_impl(self) -> None:
     connection = await create_oracle_connection(self._config)
     cursor = None
     try:
       cursor = await _call(connection.cursor)
       for statement in _schema_statements(self._config.table_prefix):
+        object_match = re.match(
+            r"CREATE\s+(TABLE|INDEX)\s+([A-Z][A-Z0-9_]*)\b",
+            statement,
+            re.IGNORECASE,
+        )
+        object_type, object_name = (
+            tuple(value.upper() for value in object_match.groups())
+            if object_match else ("", "")
+        )
+        # Existing table/FK and index DDL can wait on active writers.
+        if object_name and await self._schema_object_exists(
+            cursor, object_type, object_name
+        ):
+          continue
         try:
           await _call(cursor.execute, statement)
         except Exception as e:
+          # Another initializer may create an object after our metadata check.
+          if (
+              object_name
+              and _is_oracle_error_code(e, _ORACLE_RESOURCE_BUSY_CODE)
+              and await self._schema_object_exists(
+                  cursor, object_type, object_name
+              )
+          ):
+            continue
           if _is_oracle_already_exists_error(e):
             continue
           raise

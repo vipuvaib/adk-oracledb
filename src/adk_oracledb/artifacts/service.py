@@ -32,6 +32,7 @@ _ARTIFACT_SESSION_SCOPE = "SESSION"
 _USER_SCOPE_ID = "__USER__"
 _USER_NAMESPACE_PREFIX = "user:"
 _ORACLE_ALREADY_EXISTS_CODE = 955
+_ORACLE_RESOURCE_BUSY_CODE = 54
 _ORACLE_MISSING_CONSTRAINT_CODE = 2443
 _ORACLE_NAME_ALREADY_USED_CODE = 2264
 _ORACLE_UNIQUE_CONSTRAINT_CODE = 1
@@ -474,15 +475,39 @@ class OracleArtifactService(BaseArtifactService):
         )
       self._schema_initialized = True
 
+  async def _schema_index_exists(self, cursor: Any, index_name: str) -> bool:
+    await _call(
+        cursor.execute,
+        "SELECT 1 FROM user_indexes WHERE index_name = :index_name",
+        {"index_name": index_name},
+    )
+    return await _call(cursor.fetchone) is not None
+
   async def _ensure_schema_impl(self) -> None:
     connection = await create_oracle_connection(self._config)
     cursor = None
     try:
       cursor = await _call(connection.cursor)
       for statement in _schema_statements(self._config.table_prefix):
+        index_match = re.match(
+            r"CREATE\s+INDEX\s+([A-Z][A-Z0-9_]*)\s+ON\b",
+            statement,
+            re.IGNORECASE,
+        )
+        index_name = index_match.group(1).upper() if index_match else None
+        # Existing-index DDL can require a DML lock before reporting ORA-00955.
+        if index_name and await self._schema_index_exists(cursor, index_name):
+          continue
         try:
           await _call(cursor.execute, statement)
         except Exception as e:
+          # Another initializer may create the index after our metadata check.
+          if (
+              index_name
+              and _is_oracle_error_code(e, _ORACLE_RESOURCE_BUSY_CODE)
+              and await self._schema_index_exists(cursor, index_name)
+          ):
+            continue
           if _is_oracle_already_exists_error(e):
             continue
           if _is_oracle_missing_constraint_error(e):
@@ -523,6 +548,9 @@ class OracleArtifactService(BaseArtifactService):
 
     part = _ensure_part(artifact)
     payload_kind, payload, mime_type, part_json = _part_to_payload(part)
+    # Oracle treats an empty bytes bind as NULL, not as an empty BLOB.
+    payload_sql = ":payload_blob" if payload else "EMPTY_BLOB()"
+    payload_binds = {"payload_blob": payload} if payload else {}
     payload_hash = hashlib.sha256(payload).hexdigest()
     content_size = len(payload)
     metadata_json = _json_dump(dict(custom_metadata or {}))
@@ -598,7 +626,7 @@ class OracleArtifactService(BaseArtifactService):
                 :version,
                 :payload_kind,
                 :mime_type,
-                :payload_blob,
+                {payload_sql},
                 :part_json,
                 :custom_metadata,
                 :canonical_uri,
@@ -617,7 +645,7 @@ class OracleArtifactService(BaseArtifactService):
                   "version": version,
                   "payload_kind": payload_kind,
                   "mime_type": mime_type,
-                  "payload_blob": payload,
+                  **payload_binds,
                   "part_json": part_json_value,
                   "custom_metadata": metadata_json,
                   "canonical_uri": canonical_uri,

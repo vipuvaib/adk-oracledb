@@ -50,20 +50,26 @@ class OracleConnectionFactory:
     self._config = config
     self._oracledb = _load_oracledb()
 
+  def _supports_async_api(self, name: str) -> bool:
+    return hasattr(self._oracledb, name) and self._oracledb.is_thin_mode()
+
   @property
   def supports_async(self) -> bool:
-    return hasattr(self._oracledb, "connect_async") and hasattr(
-        self._oracledb, "create_pool_async"
-    )
+    return self.supports_async_connections and self.supports_async_pools
 
   @property
   def supports_async_connections(self) -> bool:
-    """Whether this driver exposes the asynchronous connection API."""
-    return hasattr(self._oracledb, "connect_async")
+    """Whether async connections are available in the current driver mode."""
+    return self._supports_async_api("connect_async")
+
+  @property
+  def supports_async_pools(self) -> bool:
+    """Whether async pools are available in the current driver mode."""
+    return self._supports_async_api("create_pool_async")
 
   async def create_connection(self) -> Any:
     """Create an Oracle connection, preferring python-oracledb async APIs."""
-    if hasattr(self._oracledb, "connect_async"):
+    if self.supports_async_connections:
       connection = self._oracledb.connect_async(
           **_connect_kwargs(self._config)
       )
@@ -75,7 +81,7 @@ class OracleConnectionFactory:
 
   async def create_pool(self) -> Any:
     """Create an Oracle connection pool, preferring async pool APIs."""
-    if hasattr(self._oracledb, "create_pool_async"):
+    if self.supports_async_pools:
       pool = self._oracledb.create_pool_async(**_pool_kwargs(self._config))
       if inspect.isawaitable(pool):
         pool = await pool
