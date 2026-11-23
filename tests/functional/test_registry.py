@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import os
+from secrets import token_urlsafe
 from urllib.parse import urlencode
 
 from google.adk.cli.service_registry import get_service_registry
@@ -117,17 +118,19 @@ def test_registry_parses_explicit_credentials_and_service_name(
 ) -> None:
   """Explicit oracle:// authority takes precedence over environment DSN."""
   monkeypatch.setenv("ORACLE_AI_DB_DSN", "environment-dsn")
+  password = token_urlsafe(24)
   parsed = _parse_oracle_uri(
-      "oracle://user%40name:secret@db.example.test:1522/XEPDB1"
+      f"oracle://user%40name:{password}@db.example.test:1522/XEPDB1"
   )
   assert parsed["user"] == "user@name"
-  assert parsed["password"] == "secret"
+  assert parsed["password"] == password
   assert parsed["dsn"] == "db.example.test:1522/XEPDB1"
 
 
 def test_registry_rejects_invalid_options_and_service_pool_parameters() -> None:
   """Malformed booleans/integers and unsupported pool options fail early."""
-  base = "oracle://user:secret@db.example.test/XEPDB1"
+  password = token_urlsafe(24)
+  base = f"oracle://user:{password}@db.example.test/XEPDB1"
   with pytest.raises(ValueError, match="boolean"):
     _session_config_from_uri(base + "?auto_create_tables=maybe")
   with pytest.raises(ValueError, match="only supported"):
