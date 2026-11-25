@@ -15,13 +15,16 @@ import re
 from typing import Any
 from urllib.parse import quote
 
+from adk_oracledb._config import _validate_without_input_values
 from adk_oracledb.connection import create_oracle_connection
 from adk_oracledb.connection import supports_async_connections
 from google.adk.artifacts.base_artifact_service import ArtifactVersion
 from google.adk.artifacts.base_artifact_service import BaseArtifactService
 from google.genai import types
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import SecretStr
 from pydantic import field_validator
 from pydantic import model_validator
 from typing_extensions import override
@@ -409,8 +412,10 @@ async def _artifact_version_from_row(row: Any) -> ArtifactVersion:
 class OracleArtifactServiceConfig(BaseModel):
   """Configuration for Oracle-backed ADK artifact storage."""
 
+  model_config = ConfigDict(hide_input_in_errors=True, validate_assignment=True)
+
   user: str
-  password: str
+  password: SecretStr
   dsn: str
   table_prefix: str = "ADK"
   auto_create_tables: bool = True
@@ -434,6 +439,11 @@ class OracleArtifactServiceConfig(BaseModel):
     if self.pool_max < self.pool_min:
       raise ValueError("pool_max must be greater than or equal to pool_min")
     return self
+
+  @model_validator(mode="wrap")
+  @classmethod
+  def _redact_validation_inputs(cls, value: Any, handler: Any) -> Any:
+    return _validate_without_input_values(value, handler)
 
 
 class OracleArtifactService(BaseArtifactService):

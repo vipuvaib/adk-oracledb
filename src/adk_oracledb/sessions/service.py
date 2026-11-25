@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from adk_oracledb._config import _validate_without_input_values
 from adk_oracledb.connection import create_oracle_connection
 from adk_oracledb.connection import supports_async_connections
 from google.adk.errors.already_exists_error import AlreadyExistsError
@@ -22,7 +23,9 @@ from google.adk.sessions.base_session_service import ListSessionsResponse
 from google.adk.sessions.session import Session
 from google.adk.sessions.state import State
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import SecretStr
 from pydantic import field_validator
 from pydantic import model_validator
 from typing_extensions import override
@@ -194,8 +197,10 @@ def _merge_state(
 class OracleSessionServiceConfig(BaseModel):
   """Configuration for Oracle-backed ADK session storage."""
 
+  model_config = ConfigDict(hide_input_in_errors=True, validate_assignment=True)
+
   user: str
-  password: str
+  password: SecretStr
   dsn: str
   table_prefix: str = "ADK"
   auto_create_tables: bool = True
@@ -219,6 +224,11 @@ class OracleSessionServiceConfig(BaseModel):
     if self.pool_max < self.pool_min:
       raise ValueError("pool_max must be greater than or equal to pool_min")
     return self
+
+  @model_validator(mode="wrap")
+  @classmethod
+  def _redact_validation_inputs(cls, value: Any, handler: Any) -> Any:
+    return _validate_without_input_values(value, handler)
 
 
 class OracleSessionService(BaseSessionService):

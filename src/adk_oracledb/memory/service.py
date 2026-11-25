@@ -11,6 +11,7 @@ import re
 from typing import Any
 from typing import Literal
 
+from adk_oracledb._config import _validate_without_input_values
 from google.adk.events.event import Event
 from google.adk.memory.base_memory_service import BaseMemoryService
 from google.adk.memory.base_memory_service import SearchMemoryResponse
@@ -18,7 +19,9 @@ from google.adk.memory.memory_entry import MemoryEntry
 from google.adk.sessions.session import Session
 from google.genai import types
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import SecretStr
 from pydantic import field_validator
 from pydantic import model_validator
 from typing_extensions import override
@@ -253,8 +256,10 @@ class _InputTypeAwareEmbedder:
 class OracleMemoryServiceConfig(BaseModel):
   """Configuration for Oracle-backed ADK memory integration."""
 
+  model_config = ConfigDict(hide_input_in_errors=True, validate_assignment=True)
+
   user: str
-  password: str
+  password: SecretStr
   dsn: str
   pool_min: int = Field(default=1, ge=1)
   pool_max: int = Field(default=4, ge=1)
@@ -262,14 +267,14 @@ class OracleMemoryServiceConfig(BaseModel):
   schema_policy: SchemaPolicyLiteral = "create_if_necessary"
   embedder_model: str | None = None
   embedder_api_base: str | None = None
-  embedder_api_key: str | None = None
+  embedder_api_key: SecretStr | None = None
   embedder_encoding_format: str | None = None
   embedder_input_type: str | None = None
   embedder_query_input_type: str | None = None
   embedder_document_input_type: str | None = None
   llm_model: str | None = None
   llm_api_base: str | None = None
-  llm_api_key: str | None = None
+  llm_api_key: SecretStr | None = None
   extract_memories: bool = False
   search_top_k: int = Field(default=10, ge=1)
   record_types: list[str] | None = None
@@ -331,6 +336,11 @@ class OracleMemoryServiceConfig(BaseModel):
       raise ValueError("pool_max must be greater than or equal to pool_min")
     return self
 
+  @model_validator(mode="wrap")
+  @classmethod
+  def _redact_validation_inputs(cls, value: Any, handler: Any) -> Any:
+    return _validate_without_input_values(value, handler)
+
 
 class OracleMemoryService(BaseMemoryService):
   """ADK memory service backed by Oracle Database and Oracle Agent Memory."""
@@ -345,7 +355,7 @@ class OracleMemoryService(BaseMemoryService):
     oracledb = _load_oracledb()
     return oracledb.create_pool(
         user=self._config.user,
-        password=self._config.password,
+        password=self._config.password.get_secret_value(),
         dsn=self._config.dsn,
         min=self._config.pool_min,
         max=self._config.pool_max,
@@ -365,7 +375,7 @@ class OracleMemoryService(BaseMemoryService):
     if self._config.embedder_api_base is not None:
       kwargs["api_base"] = self._config.embedder_api_base
     if self._config.embedder_api_key is not None:
-      kwargs["api_key"] = self._config.embedder_api_key
+      kwargs["api_key"] = self._config.embedder_api_key.get_secret_value()
     embedding_kwargs: dict[str, Any] = {}
     if self._config.embedder_encoding_format is not None:
       embedding_kwargs["encoding_format"] = self._config.embedder_encoding_format
@@ -409,7 +419,7 @@ class OracleMemoryService(BaseMemoryService):
     if self._config.llm_api_base is not None:
       kwargs["api_base"] = self._config.llm_api_base
     if self._config.llm_api_key is not None:
-      kwargs["api_key"] = self._config.llm_api_key
+      kwargs["api_key"] = self._config.llm_api_key.get_secret_value()
     return llm_cls(**kwargs)
 
   def _create_client_sync(self) -> Any:

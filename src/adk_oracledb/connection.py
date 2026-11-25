@@ -4,15 +4,20 @@ import inspect
 from typing import Any
 from typing import Protocol
 
+from pydantic import SecretStr
+
 
 class OracleDatabaseConfig(Protocol):
   """Configuration shape shared by Oracle-backed service implementations."""
 
   user: str
-  password: str
   dsn: str
   pool_min: int
   pool_max: int
+
+  @property
+  def password(self) -> str | SecretStr:
+    ...
 
 
 def _load_oracledb() -> Any:
@@ -27,9 +32,12 @@ def _load_oracledb() -> Any:
 
 
 def _connect_kwargs(config: OracleDatabaseConfig) -> dict[str, Any]:
+  password = config.password
+  if isinstance(password, SecretStr):
+    password = password.get_secret_value()
   return {
       "user": config.user,
-      "password": config.password,
+      "password": password,
       "dsn": config.dsn,
   }
 
